@@ -1,0 +1,333 @@
+<!DOCTYPE html>
+
+<html class="light" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Curator - Photo Gallery</title>
+<!-- Material Symbols -->
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<!-- Google Fonts -->
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;600;700&amp;family=Inter:wght@400;600&amp;family=Space+Grotesk:wght@600&amp;display=swap" rel="stylesheet"/>
+<!-- Tailwind CSS -->
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    "colors": {
+                        "on-surface": "#161c22",
+                        "on-tertiary-fixed": "#191c1d",
+                        "on-tertiary-container": "#828485",
+                        "on-tertiary-fixed-variant": "#454748",
+                        "primary-fixed": "#e2e2e2",
+                        "outline-variant": "#cfc4c5",
+                        "error-container": "#ffdad6",
+                        "primary": "#000000",
+                        "on-background": "#161c22",
+                        "primary-container": "#1b1b1b",
+                        "on-secondary-fixed-variant": "#3a4855",
+                        "inverse-primary": "#c6c6c6",
+                        "secondary-fixed": "#d5e4f4",
+                        "surface-container": "#e8eef6",
+                        "background": "#f6f9ff",
+                        "tertiary": "#000000",
+                        "surface-container-highest": "#dde3eb",
+                        "on-secondary-container": "#566472",
+                        "on-error": "#ffffff",
+                        "primary-fixed-dim": "#c6c6c6",
+                        "secondary": "#52606d",
+                        "inverse-surface": "#2b3137",
+                        "surface-container-high": "#e3e9f1",
+                        "on-error-container": "#93000a",
+                        "on-surface-variant": "#4c4546",
+                        "tertiary-fixed": "#e1e3e4",
+                        "surface-container-lowest": "#ffffff",
+                        "on-primary-fixed": "#1b1b1b",
+                        "tertiary-container": "#191c1d",
+                        "secondary-container": "#d2e1f1",
+                        "surface-tint": "#5e5e5e",
+                        "tertiary-fixed-dim": "#c5c7c8",
+                        "on-primary-container": "#848484",
+                        "outline": "#7e7576",
+                        "surface-bright": "#f6f9ff",
+                        "surface-dim": "#d4dbe2",
+                        "surface": "#f6f9ff",
+                        "on-secondary-fixed": "#0f1d28",
+                        "on-primary": "#ffffff",
+                        "on-tertiary": "#ffffff",
+                        "surface-container-low": "#eef4fc",
+                        "inverse-on-surface": "#ebf1f9",
+                        "error": "#ba1a1a",
+                        "on-primary-fixed-variant": "#474747",
+                        "on-secondary": "#ffffff",
+                        "secondary-fixed-dim": "#b9c8d8",
+                        "surface-variant": "#dde3eb"
+                    },
+                    "borderRadius": {
+                        "DEFAULT": "0.25rem",
+                        "lg": "0.5rem",
+                        "xl": "0.75rem",
+                        "full": "9999px"
+                    },
+                    "spacing": {
+                        "base": "8px",
+                        "margin-desktop": "64px",
+                        "margin-mobile": "16px",
+                        "section-gap": "80px",
+                        "gutter": "24px",
+                        "container-max": "1280px"
+                    },
+                    "fontFamily": {
+                        "display-lg": ["Hanken Grotesk"],
+                        "button-text": ["Hanken Grotesk"],
+                        "body-md": ["Hanken Grotesk"],
+                        "headline-lg-mobile": ["Hanken Grotesk"],
+                        "label-caps": ["Hanken Grotesk"],
+                        "headline-lg": ["Hanken Grotesk"]
+                    },
+                    "fontSize": {
+                        "display-lg": ["48px", {"lineHeight": "1.1", "letterSpacing": "-0.02em", "fontWeight": "700"}],
+                        "button-text": ["14px", {"lineHeight": "1.0", "letterSpacing": "0.02em", "fontWeight": "600"}],
+                        "body-md": ["16px", {"lineHeight": "1.6", "letterSpacing": "0", "fontWeight": "400"}],
+                        "headline-lg-mobile": ["24px", {"lineHeight": "1.2", "fontWeight": "600"}],
+                        "label-caps": ["12px", {"lineHeight": "1.0", "letterSpacing": "0.1em", "fontWeight": "600"}],
+                        "headline-lg": ["32px", {"lineHeight": "1.2", "letterSpacing": "-0.01em", "fontWeight": "600"}]
+                    }
+                },
+            },
+        }
+    </script>
+<style>
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+        }
+        body {
+            background-color: #f6f9ff;
+            color: #161c22;
+            -webkit-font-smoothing: antialiased;
+            font-family: 'Hanken Grotesk', sans-serif;
+        }
+        .glass-nav {
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+        }
+        .custom-scrollbar::-webkit-scrollbar {
+            display: none;
+        }
+        .custom-scrollbar {
+            -ms-overflow-style: none;
+            scrollbar-width: none;
+        }
+    </style>
+</head>
+<body class="font-body-md text-body-md overflow-x-hidden">
+<!-- Navigation Drawer (Desktop Anchor) -->
+<aside class="fixed left-0 top-0 h-full w-64 hidden md:flex flex-col py-8 gap-6 bg-surface border-r border-outline-variant z-50">
+<div class="px-8 mb-4">
+<span class="text-headline-lg font-headline-lg tracking-tighter text-primary uppercase">CURATOR</span>
+</div>
+<nav class="flex flex-col gap-2">
+<a class="text-primary font-bold border-l-2 border-primary pl-4 flex items-center gap-3 py-3 transition-colors" href="#">
+<span class="material-symbols-outlined">gallery_thumbnail</span>
+<span class="font-label-caps text-label-caps uppercase">Galleries</span>
+</a>
+<a class="text-on-surface-variant/70 pl-4 flex items-center gap-3 py-3 hover:text-primary hover:bg-surface-container-low transition-colors" href="#">
+<span class="material-symbols-outlined">cloud_download</span>
+<span class="font-label-caps text-label-caps uppercase">Import</span>
+</a>
+<a class="text-on-surface-variant/70 pl-4 flex items-center gap-3 py-3 hover:text-primary hover:bg-surface-container-low transition-colors" href="#">
+<span class="material-symbols-outlined">auto_awesome_motion</span>
+<span class="font-label-caps text-label-caps uppercase">Curations</span>
+</a>
+<a class="text-on-surface-variant/70 pl-4 flex items-center gap-3 py-3 hover:text-primary hover:bg-surface-container-low transition-colors" href="#">
+<span class="material-symbols-outlined">archive</span>
+<span class="font-label-caps text-label-caps uppercase">Archive</span>
+</a>
+</nav>
+</aside>
+<!-- Main Content -->
+<main class="md:ml-64 min-h-screen">
+<div class="max-w-container-max mx-auto px-margin-mobile md:px-margin-desktop py-8">
+<!-- Wish Board Selector -->
+<section class="mb-8">
+<div class="flex justify-between items-center mb-6">
+<h2 class="font-label-caps text-label-caps text-on-surface-variant tracking-widest uppercase">WISH BOARD</h2>
+<button class="flex items-center gap-2 font-label-caps text-label-caps text-on-surface-variant hover:text-primary transition-colors">
+<span class="material-symbols-outlined !text-[18px]">add_box</span>
+<span class="uppercase">NEW</span>
+</button>
+</div>
+<!-- Chip selection -->
+<div class="flex overflow-x-auto gap-3 custom-scrollbar pb-2">
+<button class="whitespace-nowrap px-6 py-2.5 rounded-full bg-primary text-on-primary font-label-caps text-label-caps border border-primary transition-all active:scale-95 uppercase">Shelter</button>
+<button class="whitespace-nowrap px-6 py-2.5 rounded-full bg-white text-on-surface font-label-caps text-label-caps border border-outline-variant hover:border-primary transition-all active:scale-95 uppercase">Living Room</button>
+<button class="whitespace-nowrap px-6 py-2.5 rounded-full bg-white text-on-surface font-label-caps text-label-caps border border-outline-variant hover:border-primary transition-all active:scale-95 uppercase">Office</button>
+<button class="whitespace-nowrap px-6 py-2.5 rounded-full bg-white text-on-surface font-label-caps text-label-caps border border-outline-variant hover:border-primary transition-all active:scale-95 uppercase">Archive</button>
+<button class="whitespace-nowrap px-6 py-2.5 rounded-full bg-white text-on-surface font-label-caps text-label-caps border border-outline-variant hover:border-primary transition-all active:scale-95 uppercase">Minimal Loft</button>
+</div>
+</section>
+<!-- Card Layout Containers -->
+<div class="space-y-6">
+<!-- Gallery / Board Items Card -->
+<section class="bg-surface-container-lowest border border-outline-variant rounded-xl overflow-hidden shadow-sm">
+<div class="px-6 py-4 border-b border-outline-variant bg-white flex justify-between items-center">
+<h2 class="font-label-caps text-label-caps text-on-surface tracking-widest font-bold uppercase">BOARD ITEMS (201)</h2>
+<button class="text-on-surface-variant hover:text-primary">
+<span class="material-symbols-outlined">filter_list</span>
+</button>
+</div>
+<div class="p-6">
+<div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+<!-- Photo Card 1 -->
+<div class="relative aspect-square bg-surface-container rounded-lg overflow-hidden group">
+<img class="w-full h-full object-cover" data-alt="A candid artistic photograph" src="https://lh3.googleusercontent.com/aida-public/AB6AXuCKHfyKVC0rGSoMMOT4N4i9c6pITS4R4C-o3hkQd_IS6Wu8mgVSE36cGjbv8eBSkzoGBkesR-Mr5xoP2I22s3OxVwv9I3IIQytHo3ERv81tzlsIs99kjD02QQugG7VCOfT_jo2e2gij-4p6p1KYxUdBf2_TIpAJoDeo4Qqi2-2CEhgsIpKNc84SodgE3a906xUsoK3ZgdTNASJdrlsZekBrcWTZoQEWQfmHD8fOUjsnhAX4r9MCIdfXExYHRrW3tHICA8A-wOKeQfo"/>
+<div class="absolute inset-0 bg-primary/5 opacity-0 group-hover:opacity-100 transition-opacity"></div>
+<div class="absolute top-2 right-2 bg-error text-on-error w-6 h-6 flex items-center justify-center rounded-sm opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer hover:bg-red-700">
+<span class="material-symbols-outlined !text-[16px]">close</span>
+</div>
+</div>
+<!-- Photo Card 2 -->
+<div class="relative aspect-square bg-surface-container rounded-lg overflow-hidden group">
+<img class="w-full h-full object-cover" data-alt="Minimalist event stage" src="https://lh3.googleusercontent.com/aida-public/AB6AXuD409FeXzYkMSec86qVR4INVeBdT0zJHEYxIbJ5JWHYYZkd5RdYDD3DMuoyDV6QacETnJQGYP0t1Okcjjy5fwKFuxeR6YjJyKpDsgT3Zv_YxyvFhX1M5bwJCgwvP_uMsGMO401i1pQ71Jw6b4fIfCBJoQLE7EY5tmpYqfElTO4VlfdHOGck2ltJyh5i1HGxC3u2vA3WEwlGzVorSb58wZaUiRG8wEgmcb7ZHIDHyGsseq2RNU8Vvj_hJPsXnwgY0QGyMrFA64IyXrw"/>
+<div class="absolute top-2 right-2 bg-error text-on-error w-6 h-6 flex items-center justify-center rounded-sm cursor-pointer hover:bg-red-700 transition-colors">
+<span class="material-symbols-outlined !text-[16px]">close</span>
+</div>
+</div>
+<!-- Photo Card 3 -->
+<div class="relative aspect-square bg-surface-container rounded-lg overflow-hidden group">
+<img class="w-full h-full object-cover" data-alt="Watch portrait" src="https://lh3.googleusercontent.com/aida-public/AB6AXuBM6H_CdwjwC20WzwqHN-xo7koyXdhKbSZ6jHnDUnEU6R1xdBR1fG6S40vNZeOFwPfEzbbEtyC8NOk8xMwMwWy55NuOJPTWcryZD36XJIocBpYPXQZCJrPzsdxlkBXBFPSxEN_M98LbAa9NsfnU79IRFSC_IY35rGg-p2SAPGe_srO0I1xZOef7B33sPNc7vjtYmmH1r_c5-kCK-3pnu6fmlmUmJHgMk0yNoA4pBbAfcm6i0tAJfhWdZMhlFUeEuYTvJmEdgzmSOfA"/>
+<div class="absolute top-2 left-2 text-on-surface-variant bg-white/40 backdrop-blur-sm rounded-full p-1">
+<span class="material-symbols-outlined !text-xl" style="font-variation-settings: 'FILL' 1;">play_circle</span>
+</div>
+<div class="absolute top-2 right-2 bg-error text-on-error w-6 h-6 flex items-center justify-center rounded-sm opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer hover:bg-red-700">
+<span class="material-symbols-outlined !text-[16px]">close</span>
+</div>
+</div>
+<!-- Photo Card 4 -->
+<div class="relative aspect-square bg-surface-container rounded-lg overflow-hidden group">
+<img class="w-full h-full object-cover" data-alt="Architectural staircase" src="https://lh3.googleusercontent.com/aida-public/AB6AXuASbxQrTD1czuMGeay62aT22NuzGyxjEEDJ9W4jbzOr0PdblsUCzKU44EQeGZdpKzBmrxunU9BMPRao_kwYXaaZfw1S0HS2evV1uX5TNUfKKgeRvEHn4tBDmH3jLAqyf8gAWYNqtX7M3EgmO42SdAl5fmeMyiuc-i9LGqFw4FRWcv1I0DGtIckkU_W0ySq17xa-0G67dUpt2Yrnk0eBxm0xRwwcbiMZNSG96OWZLUAxeVE1RsPPcV9kyqcPRisDXmF-Mn5B3Xt0Ruo"/>
+<div class="absolute top-2 right-2 bg-error text-on-error w-6 h-6 flex items-center justify-center rounded-sm cursor-pointer hover:bg-red-700 transition-colors">
+<span class="material-symbols-outlined !text-[16px]">close</span>
+</div>
+</div>
+<!-- Photo Card 5 -->
+<div class="relative aspect-square bg-surface-container rounded-lg overflow-hidden group">
+<img class="w-full h-full object-cover" data-alt="Laughing woman" src="https://lh3.googleusercontent.com/aida-public/AB6AXuCMgbR0v9nJT6PwwvAkIVSotfPxmC4LfJztL-BzBH8_QzCP1rdUrcJg9BjWb-xNxFT8PGa9HNJPiaFkA_ePQAUIJrHM1TFohv6kwnFgdPa3UudPEFxJYISYyHxx6EPZxRLIpwsSVA15pAFq1E9VQxDmpWv7ZaQHN_JDMMRMSammb6taKSae86EVIoFIF448EmpPPxhtPNHKCbmT1oM_bnwB_XdyBjyouXUOHW5ZFVmStDb3IqC7W7fbdZhzvCuqx5MY1ya6hPqfTDI"/>
+<div class="absolute top-2 right-2 bg-error text-on-error w-6 h-6 flex items-center justify-center rounded-sm cursor-pointer hover:bg-red-700 transition-colors">
+<span class="material-symbols-outlined !text-[16px]">close</span>
+</div>
+</div>
+<!-- Photo Card 6 -->
+<div class="relative aspect-square bg-surface-container rounded-lg overflow-hidden group">
+<img class="w-full h-full object-cover" data-alt="Bicycle landscape" src="https://lh3.googleusercontent.com/aida-public/AB6AXuBcUUby18NLkcrS-4CnRpol6OTR6asq74gvEwdamF-M26rK4ncS8l8gRi3NoAYvFnNU0rm8NhDUQWgWFG9UQrRS3ssaxHQtTf-GqigCi6awLHK9PPhkmtwALEI-reUHvKzkJsKp9J7w_HlNMo1lbbaZg6FKcTGhqxuLyA07xsiQRdMJuS6fgGrB0f5GW4pXjfMWNalrHlUrRHQcSME5ic_juNVpRXex3AWINCdz8hyLarvAKKNEEomNInrzcb3sqUOsuAVcHW3IYGY"/>
+<div class="absolute top-2 right-2 bg-error text-on-error w-6 h-6 flex items-center justify-center rounded-sm opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer hover:bg-red-700">
+<span class="material-symbols-outlined !text-[16px]">close</span>
+</div>
+</div>
+<!-- Photo Card 7 -->
+<div class="relative aspect-square bg-surface-container rounded-lg overflow-hidden group">
+<img class="w-full h-full object-cover" data-alt="Street scene" src="https://lh3.googleusercontent.com/aida-public/AB6AXuCIP_8sXHWlstYnyAxfxNeP7JSLM1st9yhZp0ZohtbU9ag43dCxqiVsj0Gu5zjRMSg4O6myDmpmHXz2gTh1_9Pt_j6kC3xN4yJ2SLJvXkz7LHBfYgqNr23ZvWOpeRL0wp3pIRuOlO4UJC5g1trJSBAcanAFUuSZraXlvKugDcO1tmeccZQeZNLJsbN0QVUDY0kvVpt7N00yv3M6ZZGavLFGmwikyUlUKGGn_08IrEMPjL4yZnbVidWPw61dQiYd3-NdPIHyRoZp-F8"/>
+<div class="absolute top-2 right-2 bg-error text-on-error w-6 h-6 flex items-center justify-center rounded-sm cursor-pointer hover:bg-red-700 transition-colors">
+<span class="material-symbols-outlined !text-[16px]">close</span>
+</div>
+</div>
+<!-- Photo Card 8 -->
+<div class="relative aspect-square bg-surface-container rounded-lg overflow-hidden group">
+<img class="w-full h-full object-cover" data-alt="Modern workspace" src="https://lh3.googleusercontent.com/aida-public/AB6AXuCZ2hkkkA0SwF2HxjzxZDoZBq9BuANVbLggUuhb-7g7QHO0ffXYhZekojR0QMzq02i1kc2Xlx65Gl6cAI2TtIPbXbQjVflbl6JAL3iV9xcezolCwYwWBlJFGiG7k4zXlVIwiBbBZdYtKkQ_pmxlDxF2YISNMH2McRATW6Ab2pXn-TZh24V9T7PyAzI8zBtQz-ZpbocahPJg8buFSmvwmOh6FSPrt0OssT5wUc8tZEj9FzNCrV8SoOTIrLGes0uYaeHQlMxu6Z_9sFA"/>
+<div class="absolute top-2 right-2 bg-error text-on-error w-6 h-6 flex items-center justify-center rounded-sm opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer hover:bg-red-700">
+<span class="material-symbols-outlined !text-[16px]">close</span>
+</div>
+</div>
+</div>
+</div>
+</section>
+<!-- Images / Upload Card -->
+<section class="bg-surface-container-lowest border border-outline-variant rounded-xl overflow-hidden shadow-sm">
+<div class="px-6 py-4 border-b border-outline-variant flex justify-between items-center bg-white">
+<h2 class="font-label-caps text-label-caps text-on-surface tracking-widest font-bold uppercase">IMAGES</h2>
+</div>
+<div class="p-6">
+<div class="border-2 border-dashed border-outline-variant/40 rounded-xl bg-surface-container-low/30 p-10 flex flex-col items-center justify-center text-center group cursor-pointer hover:bg-surface-container-low transition-all">
+<button class="bg-white border border-outline-variant px-6 py-3 rounded-lg flex items-center gap-3 mb-6 shadow-sm group-hover:scale-105 transition-transform">
+<span class="material-symbols-outlined text-primary">upload</span>
+<span class="font-label-caps text-label-caps text-primary uppercase">UPLOAD</span>
+</button>
+<p class="font-body-md text-on-surface-variant text-sm max-w-xs leading-relaxed">
+                                Choose images or drag &amp; drop it here.<br/>
+<span class="text-xs opacity-60">JPG, JPEG, PNG and WEBP. Max 20 MB.</span>
+</p>
+</div>
+</div>
+</section>
+<!-- URL Import Card -->
+<section class="bg-surface-container-lowest border border-outline-variant rounded-xl overflow-hidden shadow-sm">
+<div class="px-6 py-4 border-b border-outline-variant bg-white">
+<h2 class="font-label-caps text-label-caps text-on-surface tracking-widest font-bold uppercase">IMPORT FROM WEB</h2>
+</div>
+<div class="p-6 flex flex-col md:flex-row gap-4">
+<div class="flex-grow relative">
+<span class="material-symbols-outlined absolute left-4 top-1/2 -translate-y-1/2 text-on-surface-variant">link</span>
+<input class="w-full bg-surface-container-low/20 border border-outline-variant rounded-lg pl-12 pr-4 py-4 font-body-md focus:outline-none focus:border-primary placeholder:text-on-surface-variant/40 transition-colors" placeholder="Paste URL here..." type="text"/>
+</div>
+<button class="bg-primary text-on-primary px-10 py-4 rounded-lg font-label-caps text-label-caps tracking-widest hover:opacity-90 active:scale-95 duration-100 transition-all flex items-center justify-center gap-2 uppercase">
+<span class="material-symbols-outlined !text-lg">add</span>
+                            ADD
+                        </button>
+</div>
+</section>
+<!-- External Sync Section -->
+<section class="bg-surface-container-low/30 border border-outline-variant rounded-xl p-8 border-dashed">
+<div class="flex items-center gap-3 mb-6">
+<span class="material-symbols-outlined text-on-surface-variant">photo_library</span>
+<h2 class="font-label-caps text-label-caps text-on-surface tracking-widest uppercase">LINK EXTERNAL ALBUM</h2>
+</div>
+<div class="flex flex-col md:flex-row gap-4">
+<div class="flex-grow">
+<input class="w-full bg-white border border-outline-variant rounded-lg px-4 py-4 font-body-md focus:outline-none focus:border-primary placeholder:text-on-surface-variant/40 transition-colors shadow-sm" placeholder="https://photos.app.goo.gl/..." type="text"/>
+</div>
+<button class="bg-primary text-on-primary px-10 py-4 rounded-lg font-label-caps text-label-caps tracking-widest hover:opacity-90 active:scale-95 duration-100 transition-all uppercase">
+                            SYNC
+                        </button>
+</div>
+</section>
+</div>
+</div>
+</main>
+<!-- Bottom Nav Bar (Mobile Only) -->
+<!-- Overlay Floating Controls (Desktop/Context) -->
+<div class="fixed bottom-12 right-12 z-40 hidden md:flex flex-col gap-4">
+<button class="bg-white border border-outline-variant w-12 h-12 rounded-full flex items-center justify-center hover:bg-surface-container transition-colors shadow-lg">
+<span class="material-symbols-outlined !text-[20px]">close</span>
+</button>
+<button class="bg-white border border-outline-variant w-12 h-12 rounded-full flex items-center justify-center hover:bg-surface-container transition-colors shadow-lg">
+<span class="material-symbols-outlined !text-[20px]">settings</span>
+</button>
+</div>
+<script>
+        // Chip interaction logic
+        document.querySelectorAll('section .flex.overflow-x-auto button').forEach(button => {
+            button.addEventListener('click', function() {
+                document.querySelectorAll('section .flex.overflow-x-auto button').forEach(b => {
+                    b.classList.remove('bg-primary', 'text-on-primary', 'border-primary');
+                    b.classList.add('bg-white', 'text-on-surface', 'border-outline-variant');
+                });
+                this.classList.add('bg-primary', 'text-on-primary', 'border-primary');
+                this.classList.remove('bg-white', 'text-on-surface', 'border-outline-variant');
+            });
+        });
+
+        // Hover effect for image removal
+        document.querySelectorAll('.group .bg-error').forEach(closeBtn => {
+            closeBtn.addEventListener('click', function(e) {
+                e.stopPropagation();
+                const card = this.closest('.relative');
+                card.style.opacity = '0';
+                card.style.transform = 'scale(0.95)';
+                setTimeout(() => {
+                    card.style.display = 'none';
+                }, 300);
+            });
+        });
+    </script>
+</body></html>

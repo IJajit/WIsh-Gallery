@@ -1,0 +1,6 @@
+{
+  "name": "Wish Photo Gallery",
+  "description": "An interactive, beautifully polished 3D rotating image carousel for your wishes and goals. Create custom wish albums, upload images, or sync with your Google account on a clean white canvas.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

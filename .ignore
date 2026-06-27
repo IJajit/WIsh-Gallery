@@ -1,0 +1,33 @@
+# Block secrets and credentials
+/secrets/**
+**/*.crt
+**/*.key
+**/*.pem
+.env
+**/.env*
+
+# Block build artifacts & dependencies
+**/node_modules/**
+**/dist/**
+**/build/**
+**/.cache/**
+
+# Block sensitive config
+**/*-secret.json
+**/credentials.json
+**/api-keys.json
+
+# Block IDE/OS junk
+**/.vscode/**
+**/.idea/**
+**/__pycache__/**
+**/*.pyc
+**/.DS_Store
+**/thumbs.db
+
+# Only 500 lines of context for logs
+**/*.log
+
+# Allow exceptions
+!config.local.json
+!*.dev.json

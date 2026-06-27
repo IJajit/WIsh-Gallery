@@ -14,6 +14,8 @@ if (fs.existsSync(distPath)) {
   app.use(express.static(distPath));
 }
 
+// ─── HTML Parsing Helpers ────────────────────────────────────────────────────
+
 function extractCallbackBlocks(html) {
   const blocks = [];
   const startPat = 'AF_initDataCallback({';
@@ -26,122 +28,138 @@ function extractCallbackBlocks(html) {
       if (inStr) { if (c === '\\') i++; else if (c === strCh) inStr = false; continue; }
       if (c === '"' || c === "'") { inStr = true; strCh = c; continue; }
       if (c === '{') depth++;
-      else if (c === '}') { depth--; if (depth === 0) { const rest = html.slice(i + 1); const m = rest.match(/^\s*\)\s*;/); if (m) { blocks.push(html.slice(pos, i + 1 + m[0].length)); pos = i + 1 + m[0].length; } else pos = i + 1; break; } }
+      else if (c === '}') {
+        depth--;
+        if (depth === 0) {
+          const rest = html.slice(i + 1);
+          const m = rest.match(/^\s*\)\s*;/);
+          if (m) { blocks.push(html.slice(pos, i + 1 + m[0].length)); pos = i + 1 + m[0].length; }
+          else pos = i + 1;
+          break;
+        }
+      }
     }
     if (depth !== 0) { pos = html.length; break; }
   }
   return blocks;
 }
 
+/**
+ * Shared helper: convert a raw items array (from ds:1 or batchexecute) into
+ * our normalised image objects. Mutates `out` array in place for efficiency.
+ */
+function parseBatchItems(rawItems, out, albumName) {
+  albumName = albumName || 'Google Photos Album';
+  for (const item of rawItems) {
+    if (!Array.isArray(item)) continue;
+    const photoId = item[0];
+    if (typeof photoId !== 'string' || !photoId.startsWith('AF1Qip')) continue;
+    const media = item[1];
+    if (!Array.isArray(media)) continue;
+
+    const mimePattern = /video\/\w+|\.mp4|\.webm|\.mov|quicktime|x-matroska|mpeg/i;
+    const itemStr = JSON.stringify(item).toLowerCase();
+    const isVideo = (
+      item.some((el, ei) =>
+        Array.isArray(el) && el.some((sub, si) =>
+          typeof sub === 'string' && !(ei === 1 && si === 0) && mimePattern.test(sub)
+        )
+      ) ||
+      (Array.isArray(media) && media.some((m, idx) =>
+        idx > 0 && typeof m === 'string' && mimePattern.test(m)
+      )) ||
+      (media[0] && typeof media[0] === 'string' && /=w0($|[^1-9])/.test(media[0])) ||
+      item.some(el => typeof el === 'string' && /video|mp4|webm|mov|quicktime|mpeg/i.test(el)) ||
+      (item[3] !== undefined && item[3] !== null && typeof item[3] === 'string' &&
+       (item[3].startsWith('https://') || item[3].startsWith('http://')) &&
+       item[3] !== media[0]) ||
+      (item[4] && JSON.stringify(item[4]).toLowerCase().includes('video')) ||
+      (item[5] && JSON.stringify(item[5]).toLowerCase().includes('video')) ||
+      (item[6] && JSON.stringify(item[6]).toLowerCase().includes('video')) ||
+      (item[7] && JSON.stringify(item[7]).toLowerCase().includes('video')) ||
+      /\"video[^a-z]|\"mp4\"|\"webm\"|\"quicktime\"|\"x-matroska\"|media_type.*video/i.test(itemStr) ||
+      (Array.isArray(media) && media.length > 3 && typeof media[3] === 'string' && !media[3].startsWith('https://lh3')) ||
+      (Array.isArray(media) && media.length >= 3 &&
+       ((typeof media[1] === 'number' && media[1] <= 0) || media[1] === null) &&
+       ((typeof media[2] === 'number' && media[2] <= 0) || media[2] === null))
+    );
+
+    const imageUrl = media[0];
+    if (typeof imageUrl === 'string' && imageUrl.startsWith('https://lh3.googleusercontent.com/')) {
+      const fullResUrl = imageUrl.replace(/=w\d+(-h\d+)?/, '=w1200');
+      let timestamp = typeof item[2] === 'number' ? item[2] : null;
+      if (timestamp !== null && timestamp < 100000000000) timestamp *= 1000;
+      let videoUrl = null;
+      if (typeof item[3] === 'string' && (item[3].startsWith('https://') || item[3].startsWith('http://')) && item[3] !== imageUrl) {
+        videoUrl = item[3];
+      } else if (Array.isArray(media) && media.length > 3 && typeof media[3] === 'string' && media[3].startsWith('http') && !media[3].includes('googleusercontent')) {
+        videoUrl = media[3];
+      }
+      out.push({
+        url: fullResUrl,
+        photoId,
+        timestamp,
+        title: albumName,
+        author: 'Google Photos',
+        category: 'Synced',
+        description: `From shared album: ${albumName}`,
+        isVideo,
+        videoUrl,
+        originalUrl: imageUrl,
+      });
+    }
+  }
+}
+
+/**
+ * Parse the initial album HTML page.
+ * Returns { images, albumName, contToken, albumId }
+ * where contToken is the page-continuation token for batchexecute pagination.
+ */
 function extractImageUrls(html) {
   const images = [];
   let albumName = 'Google Photos Album';
+  let contToken = null;
+  let albumId = null;
 
   const blocks = extractCallbackBlocks(html);
 
   for (const fullBlock of blocks) {
-    // Strip the outer AF_initDataCallback({ ... });
     const inner = fullBlock.replace(/^AF_initDataCallback\(\{/, '').replace(/\}\s*\)\s*;$/, '');
     const block = inner;
 
-    // Check if this is ds:1 (contains full photo metadata)
+    // ds:1 — photo items + pagination token
     if (block.includes("key: 'ds:1'") || block.includes('key: "ds:1"')) {
-      // Extract the data array
       const dataMatch = block.match(/data:(\[[\s\S]*)/);
       if (!dataMatch) continue;
-
       try {
         const rawData = dataMatch[1];
         const dataStr = rawData.replace(/,?\s*sideChannel\s*:\s*\{[^}]*\}\s*$/, '');
         const data = JSON.parse(dataStr);
-        const items = data[1] || [];
-        const contToken = data[2];
-        const totalHint = data[0]?.[0];
-        console.log(`ds:1: ${items.length} items, data[0]=${JSON.stringify(data[0]).slice(0, 100)}, data[2]=${JSON.stringify(data[2]).slice(0, 60)}`);
+        const rawItems = data[1] || [];
+        const rawToken = data[2];
 
-        // Try alternate pagination source: check for page tokens in data[0]
-        let pageToken = contToken;
-        // Sometimes Google puts the page token inside a nested array in data[0]
-        if (!pageToken && Array.isArray(data[0]) && data[0].length > 3 && typeof data[0][2] === 'string') {
-          pageToken = data[0][2];
-          console.log(`Found alternate pageToken in data[0][2]: ${pageToken.substring(0, 30)}...`);
+        console.log(`ds:1: ${rawItems.length} items, data[2]=${JSON.stringify(rawToken).slice(0, 60)}`);
+
+        if (typeof rawToken === 'string' && rawToken.length > 5) {
+          contToken = rawToken;
         }
 
-        for (const item of items) {
-          if (!Array.isArray(item)) continue;
-          const photoId = item[0];
-          if (typeof photoId !== 'string' || !photoId.startsWith('AF1Qip')) continue;
-          const media = item[1];
-          if (!Array.isArray(media)) continue;
-
-          const mimePattern = /video\/\w+|\.mp4|\.webm|\.mov|quicktime|x-matroska|mpeg/i;
-          const itemStr = JSON.stringify(item).toLowerCase();
-          const isVideo = (
-            // 1. Check if any sub-array in the item contains a video mime string
-            item.some((el, ei) =>
-              Array.isArray(el) && el.some((sub, si) =>
-                typeof sub === 'string' && !(ei === 1 && si === 0) && mimePattern.test(sub)
-              )
-            ) ||
-            // 2. Check media array elements for video indicators (skip URL at index 0)
-            (Array.isArray(media) && media.some((m, i) =>
-              i > 0 && typeof m === 'string' && mimePattern.test(m)
-            )) ||
-            // 3. Check URL for zero-width pattern (videos sometimes get =w0)
-            (media[0] && typeof media[0] === 'string' && /=w0($|[^1-9])/.test(media[0])) ||
-            // 4. Check item-level strings for video indicators
-            item.some(el => typeof el === 'string' && /video|mp4|webm|mov|quicktime|mpeg/i.test(el)) ||
-            // 5. Check if item[3] is a URL DIFFERENT from media[0] (Google Photos stores video URLs here)
-            (item[3] !== undefined && item[3] !== null && typeof item[3] === 'string' &&
-             (item[3].startsWith('https://') || item[3].startsWith('http://')) &&
-             item[3] !== media[0]) ||
-            // 6. Check deep metadata fields for video indicators
-            (item[4] && JSON.stringify(item[4]).toLowerCase().includes('video')) ||
-            (item[5] && JSON.stringify(item[5]).toLowerCase().includes('video')) ||
-            (item[6] && JSON.stringify(item[6]).toLowerCase().includes('video')) ||
-            (item[7] && JSON.stringify(item[7]).toLowerCase().includes('video')) ||
-            // 7. Catch-all: brute-force check of the full serialized item
-            /"video[^a-z]|"mp4"|"webm"|"quicktime"|"x-matroska"|media_type.*video/i.test(itemStr) ||
-            // 8. Check if media array has more than 3 elements with non-lh3 URL at index 3
-            (Array.isArray(media) && media.length > 3 && typeof media[3] === 'string' && !media[3].startsWith('https://lh3')) ||
-            // 9. Check for zero/non-numeric dimensions (videos often have 0 or null width/height)
-            (Array.isArray(media) && media.length >= 3 &&
-             ((typeof media[1] === 'number' && media[1] <= 0) || media[1] === null) &&
-             ((typeof media[2] === 'number' && media[2] <= 0) || media[2] === null))
-          );
-          const imageUrl = media[0];
-          if (typeof imageUrl === 'string' && imageUrl.startsWith('https://lh3.googleusercontent.com/')) {
-            const fullResUrl = imageUrl.replace(/=w\d+(-h\d+)?/, '=w1200');
-            let timestamp = typeof item[2] === 'number' ? item[2] : null;
-            if (timestamp !== null && timestamp < 100000000000) {
-              timestamp *= 1000;
-            }
-            let videoUrl = null;
-            if (typeof item[3] === 'string' && (item[3].startsWith('https://') || item[3].startsWith('http://')) && item[3] !== imageUrl) {
-              videoUrl = item[3];
-            } else if (Array.isArray(media) && media.length > 3 && typeof media[3] === 'string' && media[3].startsWith('http') && !media[3].includes('googleusercontent')) {
-              videoUrl = media[3];
-            }
-            images.push({
-              url: fullResUrl,
-              photoId,
-              timestamp,
-              title: albumName,
-              author: 'Google Photos',
-              category: 'Synced',
-              description: `From shared album: ${albumName}`,
-              isVideo,
-              videoUrl,
-              originalUrl: imageUrl,
-            });
+        // Album ID is sometimes stored at data[0][0] (a long alphanumeric string)
+        if (!albumId && Array.isArray(data[0])) {
+          const candidate = data[0][0];
+          if (typeof candidate === 'string' && candidate.length > 10) {
+            albumId = candidate;
           }
         }
+
+        parseBatchItems(rawItems, images, albumName);
       } catch (e) {
         console.error('JSON parse error in ds:1:', e.message);
       }
     }
 
-    // Extract album name from ds:0
+    // ds:0 — album metadata (name)
     if (!albumName || albumName === 'Google Photos Album') {
       if (block.includes("key: 'ds:0'") || block.includes('key: "ds:0"')) {
         try {
@@ -160,9 +178,137 @@ function extractImageUrls(html) {
     }
   }
 
-  console.log(`extractImageUrls: extracted ${images.length} images from album "${albumName}"`);
+  console.log(`extractImageUrls: extracted ${images.length} images, albumName="${albumName}", contToken=${contToken ? contToken.slice(0, 20) + '...' : 'null'}, albumId=${albumId ? albumId.slice(0, 20) + '...' : 'null'}`);
+  return { images, albumName, contToken, albumId };
+}
+
+// ─── batchexecute Pagination ─────────────────────────────────────────────────
+
+/**
+ * Fetch one more page of photos from Google Photos using the snAcKc RPC.
+ * This works for public shared albums without login cookies.
+ *
+ * @param {string} shareUrl  - The resolved share URL (used as Referer)
+ * @param {string} albumId   - The album identifier (e.g. AF1Qip... or similar)
+ * @param {string} pageToken - The continuation token from the previous response
+ * @returns {{ items: Array, nextToken: string|null }}
+ */
+async function fetchNextPage(shareUrl, albumId, pageToken) {
+  // f.req payload: [[["snAcKc","[\"<albumId>\",\"<pageToken>\",null,null,null,null,1]",null,"generic"]]]
+  const inner = JSON.stringify([albumId, pageToken, null, null, null, null, 1]);
+  const rpcPayload = JSON.stringify([[['snAcKc', inner, null, 'generic']]]);
+  const bodyStr = 'f.req=' + encodeURIComponent(rpcPayload) + '&at=&';
+
+  const batchUrl = 'https://photos.google.com/_/PhotosUi/data/batchexecute?rpcids=snAcKc&source-path=/&f.sid=-1&bl=boq_photos-shared-albums&hl=en&soc-app=5&soc-platform=1&soc-device=1&rt=c';
+
+  console.log(`fetchNextPage: albumId=${albumId ? albumId.slice(0, 20) : 'null'}... token=${pageToken ? pageToken.slice(0, 20) : 'null'}...`);
+
+  let res;
+  try {
+    res = await fetch(batchUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+        'Origin': 'https://photos.google.com',
+        'Referer': shareUrl,
+        'X-Same-Domain': '1',
+      },
+      body: bodyStr,
+    });
+  } catch (e) {
+    console.warn('fetchNextPage: network error:', e.message);
+    return { items: [], nextToken: null };
+  }
+
+  if (!res.ok) {
+    console.warn(`fetchNextPage: batchexecute returned HTTP ${res.status}`);
+    return { items: [], nextToken: null };
+  }
+
+  const text = await res.text();
+  // Google batchexecute responses start with )]}'\n then a JSON array
+  const nlIdx = text.indexOf('\n');
+  if (nlIdx === -1) {
+    console.warn('fetchNextPage: unexpected response (no newline)');
+    return { items: [], nextToken: null };
+  }
+
+  try {
+    const outer = JSON.parse(text.slice(nlIdx + 1));
+    // outer is an array of response envelopes; look for wrb.fr with our snAcKc data
+    for (const envelope of outer) {
+      if (!Array.isArray(envelope) || envelope[0] !== 'wrb.fr') continue;
+      const innerJson = envelope[2];
+      if (typeof innerJson !== 'string') continue;
+
+      const innerData = JSON.parse(innerJson);
+      // innerData[1] = items array, innerData[2] = next page token
+      const rawItems = Array.isArray(innerData[1]) ? innerData[1] : [];
+      const rawNextToken = innerData[2];
+      const nextToken = typeof rawNextToken === 'string' && rawNextToken.length > 5 ? rawNextToken : null;
+      console.log(`fetchNextPage: got ${rawItems.length} items, nextToken=${nextToken ? nextToken.slice(0, 20) + '...' : 'null'}`);
+      return { items: rawItems, nextToken };
+    }
+    console.warn('fetchNextPage: no wrb.fr envelope found');
+  } catch (e) {
+    console.warn('fetchNextPage: parse error:', e.message);
+  }
+  return { items: [], nextToken: null };
+}
+
+// ─── Core Album Fetcher ──────────────────────────────────────────────────────
+
+async function fetchAlbum(url) {
+  // Resolve short URLs (photos.app.goo.gl)
+  let shareUrl = url;
+  if (url.includes('photos.app.goo.gl')) {
+    try {
+      const redirectRes = await fetch(url, {
+        method: 'HEAD',
+        redirect: 'manual',
+        headers: { 'User-Agent': 'Mozilla/5.0' }
+      });
+      const location = redirectRes.headers.get('location');
+      if (location) shareUrl = location;
+    } catch (e) {
+      console.warn('fetchAlbum: could not resolve short URL:', e.message);
+    }
+  }
+
+  console.log(`fetchAlbum: fetching initial page from ${shareUrl}`);
+  const pageRes = await fetch(shareUrl, {
+    headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36' }
+  });
+  const html = await pageRes.text();
+
+  const { images, albumName, contToken, albumId } = extractImageUrls(html);
+
+  // Paginate with batchexecute if we have a continuation token and album ID
+  if (contToken && albumId) {
+    console.log(`fetchAlbum: starting pagination (${images.length} so far)...`);
+    let pageToken = contToken;
+    let page = 1;
+    const MAX_PAGES = 50; // safety cap: 50 pages × ~300 items = ~15,000 photos
+
+    while (pageToken && page <= MAX_PAGES) {
+      const { items, nextToken } = await fetchNextPage(shareUrl, albumId, pageToken);
+      if (items.length === 0) break; // no more items
+      parseBatchItems(items, images, albumName);
+      console.log(`fetchAlbum: page ${page}: +${items.length} items (total ${images.length})`);
+      pageToken = nextToken;
+      page++;
+      // Small delay to be polite to Google's servers
+      await new Promise(r => setTimeout(r, 100));
+    }
+  } else {
+    console.log(`fetchAlbum: no pagination token found, returning ${images.length} items from initial page`);
+  }
+
   return { images, albumName };
 }
+
+// ─── Utility Functions ───────────────────────────────────────────────────────
 
 function shuffle(arr) {
   const a = [...arr];
@@ -228,25 +374,7 @@ function selectImages(images, limit = 200) {
   return { images: result, stats };
 }
 
-async function fetchAlbum(url) {
-  let shareUrl = url;
-  if (url.includes('photos.app.goo.gl')) {
-    const redirectRes = await fetch(url, {
-      method: 'HEAD',
-      redirect: 'manual',
-      headers: { 'User-Agent': 'Mozilla/5.0' }
-    });
-    const location = redirectRes.headers.get('location');
-    if (location) shareUrl = location;
-  }
-
-  console.log(`fetchAlbum: fetching album page content from ${shareUrl}`);
-  const pageRes = await fetch(shareUrl, {
-    headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36' }
-  });
-  const html = await pageRes.text();
-  return extractImageUrls(html);
-}
+// ─── API Routes ──────────────────────────────────────────────────────────────
 
 app.post('/api/parse-album', async (req, res) => {
   const { url, urls: inputUrls } = req.body;
@@ -338,7 +466,7 @@ app.get('/api/video-proxy', async (req, res) => {
     const contentLength = response.headers.get('content-length');
     const contentRange = response.headers.get('content-range');
     console.log(`video-proxy: status=${response.status}, type=${contentType}, len=${contentLength}, range=${contentRange}`);
-    
+
     // If we got HTML instead of video, check the body
     if (contentType.includes('text/html')) {
       const text = await response.text();
@@ -363,7 +491,7 @@ app.get('/api/video-proxy', async (req, res) => {
           res.write(Buffer.from(value));
         }
       };
-      pump().catch(e => { if (!res.writableEnded) res.end(); });
+      pump().catch(() => { if (!res.writableEnded) res.end(); });
     } else {
       const buf = Buffer.from(await response.arrayBuffer());
       res.end(buf);

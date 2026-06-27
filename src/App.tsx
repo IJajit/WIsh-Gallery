@@ -76,7 +76,7 @@ export default function App() {
   const [activeImage, setActiveImage] = useState<ImageItem | null>(null);
   const [selectedImage, setSelectedImage] = useState<ImageItem | null>(null);
   const [gallerySource, setGallerySource] = useState<'default' | 'wish'>('wish');
-  const [carouselCount, setCarouselCount] = useState<number>(200);
+  const [carouselCount, setCarouselCount] = useState<number>(500);
 
   const [wishAlbums, setWishAlbums] = useState<WishAlbum[]>(() => {
     try {
@@ -119,9 +119,10 @@ export default function App() {
   const [albumUrls, setAlbumUrls] = useState<string[]>(() => {
     try {
       const saved = localStorage.getItem('wish_gphotos_album_urls');
-      if (saved) { const p = JSON.parse(saved); if (Array.isArray(p) && p.length > 0) return p; }
+      if (saved) { const p = JSON.parse(saved); if (Array.isArray(p) && p.length > 0 && p.some((u: string) => u.trim().length > 0)) return p; }
     } catch {}
-    return [''];
+    // Default: pre-fill with the Shelter album URL so it's always ready
+    return ['https://photos.google.com/share/AF1QipPT1a7sLoXSf_PNGMoSpMw_pk9M0UDoCUPrCqrIr1PHuU8j7C-znnVG7eR4y0rdUg?key=UjRVaEdmci1tR0tRajZxcm51aTA4UnlZeUp3WUl3'];
   });
   const [albumLoading, setAlbumLoading] = useState<boolean>(false);
   const [albumError, setAlbumError] = useState<string>('');

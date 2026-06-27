@@ -119,6 +119,9 @@ function parseBatchItems(rawItems, out, albumName) {
 function extractImageUrls(html) {
   const images = [];
   let albumName = 'Google Photos Album';
+  // The AH_uQ... value at data[2] in ds:1 is Google's auth/session token for batchexecute
+  let authToken = null;
+  // The actual page continuation token is stored differently (in data[0] nested)
   let contToken = null;
   let albumId = null;
 
@@ -128,7 +131,7 @@ function extractImageUrls(html) {
     const inner = fullBlock.replace(/^AF_initDataCallback\(\{/, '').replace(/\}\s*\)\s*;$/, '');
     const block = inner;
 
-    // ds:1 — photo items + pagination token
+    // ds:1 — photo items + continuation tokens
     if (block.includes("key: 'ds:1'") || block.includes('key: "ds:1"')) {
       const dataMatch = block.match(/data:(\[[\s\S]*)/);
       if (!dataMatch) continue;
@@ -137,19 +140,41 @@ function extractImageUrls(html) {
         const dataStr = rawData.replace(/,?\s*sideChannel\s*:\s*\{[^}]*\}\s*$/, '');
         const data = JSON.parse(dataStr);
         const rawItems = data[1] || [];
-        const rawToken = data[2];
+        const rawD2 = data[2];
+        // data[3] contains album metadata: [albumId, albumName, timestamps...]
+        const meta = Array.isArray(data[3]) ? data[3] : null;
 
-        console.log(`ds:1: ${rawItems.length} items, data[2]=${JSON.stringify(rawToken).slice(0, 60)}`);
+        console.log(`ds:1: ${rawItems.length} items, data[0]=${JSON.stringify(data[0]).slice(0, 80)}, data[2]=${JSON.stringify(rawD2).slice(0, 80)}`);
 
-        if (typeof rawToken === 'string' && rawToken.length > 5) {
-          contToken = rawToken;
+        // data[2] in shared albums is the AH_uQ... auth token for batchexecute
+        if (typeof rawD2 === 'string' && rawD2.startsWith('AH_uQ')) {
+          authToken = rawD2;
+          console.log(`ds:1: found authToken (${authToken.length} chars)`);
+        } else if (typeof rawD2 === 'string' && rawD2.length > 5) {
+          contToken = rawD2;
         }
 
-        // Album ID is sometimes stored at data[0][0] (a long alphanumeric string)
-        if (!albumId && Array.isArray(data[0])) {
-          const candidate = data[0][0];
-          if (typeof candidate === 'string' && candidate.length > 10) {
-            albumId = candidate;
+        // data[3][0] = album ID, data[3][1] = album name
+        if (meta) {
+          if (typeof meta[0] === 'string' && meta[0].length > 10) {
+            albumId = meta[0];
+            console.log(`ds:1: albumId from data[3][0]: ${albumId.slice(0, 30)}...`);
+          }
+          if (typeof meta[1] === 'string' && meta[1].length > 0 && (!albumName || albumName === 'Google Photos Album')) {
+            albumName = meta[1];
+            console.log(`ds:1: albumName from data[3][1]: "${albumName}"`);
+          }
+        }
+
+        // Also scan data[0] for a page continuation token
+        if (Array.isArray(data[0])) {
+          for (let i = 0; i < Math.min(data[0].length, 10); i++) {
+            const el = data[0][i];
+            if (typeof el === 'string' && el.length > 20 && !el.startsWith('AH_uQ') && !el.startsWith('AF1Qip') && !el.startsWith('http')) {
+              contToken = el;
+              console.log(`ds:1: found possible pageToken in data[0][${i}]: ${el.slice(0, 30)}...`);
+              break;
+            }
           }
         }
 
@@ -158,101 +183,84 @@ function extractImageUrls(html) {
         console.error('JSON parse error in ds:1:', e.message);
       }
     }
-
-    // ds:0 — album metadata (name)
-    if (!albumName || albumName === 'Google Photos Album') {
-      if (block.includes("key: 'ds:0'") || block.includes('key: "ds:0"')) {
-        try {
-          const dataMatch = block.match(/data:(\[[\s\S]*)/);
-          if (dataMatch) {
-            const rawData = dataMatch[1];
-            const dataStr = rawData.replace(/,?\s*sideChannel\s*:\s*\{[^}]*\}\s*$/, '');
-            const data = JSON.parse(dataStr);
-            const namePath = data[0]?.[1]?.[4]?.[1]?.[1]?.[1]?.[0]?.[3]?.[0]?.[1];
-            if (namePath) albumName = namePath;
-          }
-        } catch (e) {
-          // ignore
-        }
-      }
-    }
   }
 
-  console.log(`extractImageUrls: extracted ${images.length} images, albumName="${albumName}", contToken=${contToken ? contToken.slice(0, 20) + '...' : 'null'}, albumId=${albumId ? albumId.slice(0, 20) + '...' : 'null'}`);
-  return { images, albumName, contToken, albumId };
+  console.log(`extractImageUrls: ${images.length} images, contToken=${contToken ? contToken.slice(0,20)+'...' : 'null'}, authToken=${authToken ? 'found' : 'null'}, albumId=${albumId ? albumId.slice(0,20)+'...' : 'null'}`);
+  return { images, albumName, contToken, albumId, authToken };
 }
 
 // ─── batchexecute Pagination ─────────────────────────────────────────────────
 
 /**
- * Fetch one more page of photos from Google Photos using the snAcKc RPC.
- * This works for public shared albums without login cookies.
+ * Fetch one more page of photos from a Google Photos shared album via the
+ * internal batchexecute RPC (snAcKc method).
  *
- * @param {string} shareUrl  - The resolved share URL (used as Referer)
- * @param {string} albumId   - The album identifier (e.g. AF1Qip... or similar)
- * @param {string} pageToken - The continuation token from the previous response
- * @returns {{ items: Array, nextToken: string|null }}
+ * Requires cookies forwarded from the initial page response and, ideally,
+ * the auth token (AH_uQ...) that Google embeds in the page HTML.
+ *
+ * Payload format (from real browser traffic analysis):
+ *   [["snAcKc", "[\"albumId\",\"authToken\",null,\"pageToken\",null]", null, "generic"]]
  */
-async function fetchNextPage(shareUrl, albumId, pageToken) {
-  // f.req payload: [[["snAcKc","[\"<albumId>\",\"<pageToken>\",null,null,null,null,1]",null,"generic"]]]
-  const inner = JSON.stringify([albumId, pageToken, null, null, null, null, 1]);
-  const rpcPayload = JSON.stringify([[['snAcKc', inner, null, 'generic']]]);
-  const bodyStr = 'f.req=' + encodeURIComponent(rpcPayload) + '&at=&';
+async function fetchNextPage(shareUrl, albumId, pageToken, cookies, authToken) {
+  // Two payload formats to try — with and without auth token
+  const innerWithAuth = authToken
+    ? JSON.stringify([albumId, authToken, null, pageToken, null])
+    : null;
+  const innerNoAuth = JSON.stringify([albumId, pageToken, null, null, null, null, 1]);
 
   const batchUrl = 'https://photos.google.com/_/PhotosUi/data/batchexecute?rpcids=snAcKc&source-path=/&f.sid=-1&bl=boq_photos-shared-albums&hl=en&soc-app=5&soc-platform=1&soc-device=1&rt=c';
 
-  console.log(`fetchNextPage: albumId=${albumId ? albumId.slice(0, 20) : 'null'}... token=${pageToken ? pageToken.slice(0, 20) : 'null'}...`);
+  const commonHeaders = {
+    'Content-Type': 'application/x-www-form-urlencoded',
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+    'Origin': 'https://photos.google.com',
+    'Referer': shareUrl,
+    'X-Same-Domain': '1',
+  };
+  if (cookies) commonHeaders['Cookie'] = cookies;
 
-  let res;
-  try {
-    res = await fetch(batchUrl, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-        'Origin': 'https://photos.google.com',
-        'Referer': shareUrl,
-        'X-Same-Domain': '1',
-      },
-      body: bodyStr,
-    });
-  } catch (e) {
-    console.warn('fetchNextPage: network error:', e.message);
-    return { items: [], nextToken: null };
-  }
+  console.log(`fetchNextPage: albumId=${albumId ? albumId.slice(0, 20) : 'null'}... token=${pageToken ? pageToken.slice(0, 20) : 'null'}... cookies=${cookies ? 'yes' : 'no'} auth=${authToken ? 'yes' : 'no'}`);
 
-  if (!res.ok) {
-    console.warn(`fetchNextPage: batchexecute returned HTTP ${res.status}`);
-    return { items: [], nextToken: null };
-  }
+  // Try with auth token first, then without
+  const payloads = innerWithAuth ? [innerWithAuth, innerNoAuth] : [innerNoAuth];
+  for (const inner of payloads) {
+    const rpcPayload = JSON.stringify([[['snAcKc', inner, null, 'generic']]]);
+    const bodyStr = 'f.req=' + encodeURIComponent(rpcPayload) + '&at=&';
 
-  const text = await res.text();
-  // Google batchexecute responses start with )]}'\n then a JSON array
-  const nlIdx = text.indexOf('\n');
-  if (nlIdx === -1) {
-    console.warn('fetchNextPage: unexpected response (no newline)');
-    return { items: [], nextToken: null };
-  }
-
-  try {
-    const outer = JSON.parse(text.slice(nlIdx + 1));
-    // outer is an array of response envelopes; look for wrb.fr with our snAcKc data
-    for (const envelope of outer) {
-      if (!Array.isArray(envelope) || envelope[0] !== 'wrb.fr') continue;
-      const innerJson = envelope[2];
-      if (typeof innerJson !== 'string') continue;
-
-      const innerData = JSON.parse(innerJson);
-      // innerData[1] = items array, innerData[2] = next page token
-      const rawItems = Array.isArray(innerData[1]) ? innerData[1] : [];
-      const rawNextToken = innerData[2];
-      const nextToken = typeof rawNextToken === 'string' && rawNextToken.length > 5 ? rawNextToken : null;
-      console.log(`fetchNextPage: got ${rawItems.length} items, nextToken=${nextToken ? nextToken.slice(0, 20) + '...' : 'null'}`);
-      return { items: rawItems, nextToken };
+    let res;
+    try {
+      res = await fetch(batchUrl, { method: 'POST', headers: commonHeaders, body: bodyStr });
+    } catch (e) {
+      console.warn('fetchNextPage: network error:', e.message);
+      return { items: [], nextToken: null };
     }
-    console.warn('fetchNextPage: no wrb.fr envelope found');
-  } catch (e) {
-    console.warn('fetchNextPage: parse error:', e.message);
+
+    if (!res.ok) {
+      console.warn(`fetchNextPage: HTTP ${res.status} with payload: ${inner.slice(0, 40)}...`);
+      continue; // try next payload format
+    }
+
+    const text = await res.text();
+    const nlIdx = text.indexOf('\n');
+    if (nlIdx === -1) { console.warn('fetchNextPage: no newline in response'); continue; }
+
+    try {
+      const outer = JSON.parse(text.slice(nlIdx + 1));
+      for (const envelope of outer) {
+        if (!Array.isArray(envelope) || envelope[0] !== 'wrb.fr') continue;
+        const innerJson = envelope[2];
+        if (typeof innerJson !== 'string') continue;
+        const innerData = JSON.parse(innerJson);
+        const rawItems = Array.isArray(innerData[1]) ? innerData[1] : [];
+        const rawNextToken = innerData[2];
+        const nextToken = typeof rawNextToken === 'string' && rawNextToken.length > 5 ? rawNextToken : null;
+        console.log(`fetchNextPage ✓: got ${rawItems.length} items, nextToken=${nextToken ? nextToken.slice(0, 20) + '...' : 'null'}`);
+        return { items: rawItems, nextToken };
+      }
+      console.warn('fetchNextPage: no wrb.fr envelope in response');
+    } catch (e) {
+      console.warn('fetchNextPage: parse error:', e.message, 'response sample:', text.slice(0, 200));
+    }
   }
   return { items: [], nextToken: null };
 }
@@ -276,33 +284,65 @@ async function fetchAlbum(url) {
     }
   }
 
+  // Extract album key from URL path — handles both formats:
+  //   https://photos.google.com/share/AF1QipXXX
+  //   https://photos.google.com/share/AF1QipXXX?key=YYYY
+  const urlAlbumKey = shareUrl.match(/\/share\/([^/?#]+)/)?.[1] || null;
+  if (urlAlbumKey) console.log(`fetchAlbum: album key from URL: ${urlAlbumKey.slice(0, 30)}...`);
+
   console.log(`fetchAlbum: fetching initial page from ${shareUrl}`);
   const pageRes = await fetch(shareUrl, {
-    headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36' }
+    headers: {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+      'Accept-Language': 'en-US,en;q=0.9',
+    }
   });
+
+  // Capture cookies set by Google for use in subsequent requests
+  const rawCookies = pageRes.headers.get('set-cookie');
+  let cookieString = null;
+  if (rawCookies) {
+    cookieString = rawCookies.split(/,(?=[^;]+=[^;]+;|[^;]+=)/)
+      .map(c => c.trim().split(';')[0].trim())
+      .filter(Boolean)
+      .join('; ');
+    console.log(`fetchAlbum: captured ${cookieString.split(';').length} cookies`);
+  }
+
   const html = await pageRes.text();
+  const { images, albumName, contToken, albumId, authToken } = extractImageUrls(html);
 
-  const { images, albumName, contToken, albumId } = extractImageUrls(html);
+  // Use URL-extracted key as primary album ID for batchexecute
+  const effectiveAlbumId = urlAlbumKey || albumId;
 
-  // Paginate with batchexecute if we have a continuation token and album ID
-  if (contToken && albumId) {
-    console.log(`fetchAlbum: starting pagination (${images.length} so far)...`);
+  // Pagination:
+  // - authToken (AH_uQ...) is required for batchexecute to work
+  // - contToken is the page-continuation token
+  // - If we have authToken but no contToken, try fetching with just the album ID
+  const canPaginate = authToken && effectiveAlbumId;
+
+  if (canPaginate && contToken) {
+    console.log(`fetchAlbum: starting pagination from ${images.length} initial items (authToken=${authToken.slice(0,15)}...)`);
     let pageToken = contToken;
     let page = 1;
-    const MAX_PAGES = 50; // safety cap: 50 pages × ~300 items = ~15,000 photos
+    const MAX_PAGES = 50;
 
     while (pageToken && page <= MAX_PAGES) {
-      const { items, nextToken } = await fetchNextPage(shareUrl, albumId, pageToken);
-      if (items.length === 0) break; // no more items
+      const { items, nextToken } = await fetchNextPage(shareUrl, effectiveAlbumId, pageToken, cookieString, authToken);
+      if (items.length === 0) {
+        console.log(`fetchAlbum: pagination stopped at page ${page} (no items returned)`);
+        break;
+      }
       parseBatchItems(items, images, albumName);
       console.log(`fetchAlbum: page ${page}: +${items.length} items (total ${images.length})`);
       pageToken = nextToken;
       page++;
-      // Small delay to be polite to Google's servers
-      await new Promise(r => setTimeout(r, 100));
+      await new Promise(r => setTimeout(r, 150));
     }
+    console.log(`fetchAlbum: done — ${images.length} total from ${page} page(s)`);
   } else {
-    console.log(`fetchAlbum: no pagination token found, returning ${images.length} items from initial page`);
+    console.log(`fetchAlbum: no pagination. authToken=${authToken ? 'found' : 'missing'}, contToken=${contToken ? contToken.slice(0,20)+'...' : 'null'}, albumId=${effectiveAlbumId ? effectiveAlbumId.slice(0,20)+'...' : 'null'}. Returning ${images.length} items from initial page.`);
   }
 
   return { images, albumName };

@@ -243,8 +243,7 @@ async function fetchNextPage(shareUrl, albumId, pageToken, cookies, authToken) {
 
     for (const inner of payloads) {
       const rpcPayload = JSON.stringify([[ [rpcId, inner, null, 'generic'] ]]);
-      const atToken = authToken || '';
-      const bodyStr = 'f.req=' + encodeURIComponent(rpcPayload) + '&at=' + encodeURIComponent(atToken);
+      const bodyStr = 'f.req=' + encodeURIComponent(rpcPayload) + '&at=&';
       const batchUrl = baseUrl + '&rpcids=' + rpcId;
 
       let res;

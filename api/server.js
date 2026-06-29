@@ -244,25 +244,55 @@ async function fetchNextPage(shareUrl, albumId, pageToken, cookies, authToken) {
     }
 
     const text = await res.text();
-    const nlIdx = text.indexOf('\n');
-    if (nlIdx === -1) { console.warn('fetchNextPage: no newline in response'); continue; }
 
-    try {
-      const outer = JSON.parse(text.slice(nlIdx + 1));
-      for (const envelope of outer) {
+    // Parse Google's chunked JSON format:
+    //   )]}'\n\n<length>\n<json>\n<length>\n<json>\n...
+    function parseChunks(str) {
+      const chunks = [];
+      let p = str.indexOf('\n');
+      if (p === -1) return chunks;
+      p = p + 1;
+      while (p < str.length) {
+        while (p < str.length && str[p] === '\n') p++;
+        if (p >= str.length) break;
+        const le = str.indexOf('\n', p);
+        if (le === -1) break;
+        const len = parseInt(str.slice(p, le), 10);
+        if (isNaN(len) || len <= 0) break;
+        p = le + 1;
+        if (p + len > str.length) break;
+        try { chunks.push(JSON.parse(str.slice(p, p + len))); } catch (e) { /* skip */ }
+        p = p + len;
+      }
+      return chunks;
+    }
+
+    const chunks = parseChunks(text);
+    for (const chunk of chunks) {
+      if (!Array.isArray(chunk)) continue;
+      for (const envelope of chunk) {
         if (!Array.isArray(envelope) || envelope[0] !== 'wrb.fr') continue;
         const innerJson = envelope[2];
         if (typeof innerJson !== 'string') continue;
-        const innerData = JSON.parse(innerJson);
-        const rawItems = Array.isArray(innerData[1]) ? innerData[1] : [];
-        const rawNextToken = innerData[2];
-        const nextToken = typeof rawNextToken === 'string' && rawNextToken.length > 5 ? rawNextToken : null;
-        console.log(`fetchNextPage ✓: got ${rawItems.length} items, nextToken=${nextToken ? nextToken.slice(0, 20) + '...' : 'null'}`);
-        return { items: rawItems, nextToken };
+        try {
+          const innerData = JSON.parse(innerJson);
+          const rawItems = Array.isArray(innerData[1]) ? innerData[1] : [];
+          const rawNextToken = innerData[2] || innerData[innerData.length - 1] || null;
+          const nextToken = typeof rawNextToken === 'string' && rawNextToken.length > 5 ? rawNextToken : null;
+          console.log(`fetchNextPage ✓: got ${rawItems.length} items, nextToken=${nextToken ? nextToken.slice(0, 20) + '...' : 'null'}`);
+          if (rawItems.length > 0 || nextToken) {
+            return { items: rawItems, nextToken };
+          }
+        } catch (e) { /* skip inner parse errors */ }
       }
-      console.warn('fetchNextPage: no wrb.fr envelope in response');
-    } catch (e) {
-      console.warn('fetchNextPage: parse error:', e.message, 'response sample:', text.slice(0, 200));
+    }
+
+    // If we got here, check for error status in the response
+    const hasError = chunks.some(c => Array.isArray(c) && c[0] === 'e');
+    if (hasError) {
+      console.warn('fetchNextPage: RPC returned error, response:', text.slice(0, 300));
+    } else {
+      console.warn('fetchNextPage: no wrb.fr envelope found in response, length=' + text.length);
     }
   }
   return { items: [], nextToken: null };

@@ -192,37 +192,23 @@ function extractImageUrls(html) {
 // ─── batchexecute Pagination ─────────────────────────────────────────────────
 
 /**
- * Parse Google\'s batchexecute chunked-JSON response format:
- *   )]}\'\n\n<length>\n<json>\n<length>\n<json>\n...
- */
-function parseChunks(text) {
-  const chunks = [];
-  let pos = text.indexOf('\n');
-  if (pos === -1) return chunks;
-  pos = pos + 1;
-  while (pos < text.length) {
-    while (pos < text.length && text[pos] === '\n') pos++;
-    if (pos >= text.length) break;
-    const lenEnd = text.indexOf('\n', pos);
-    if (lenEnd === -1) break;
-    const length = parseInt(text.slice(pos, lenEnd), 10);
-    if (isNaN(length) || length <= 0) break;
-    pos = lenEnd + 1;
-    if (pos + length > text.length) break;
-    const jsonStr = text.slice(pos, pos + length);
-    try { chunks.push(JSON.parse(jsonStr)); } catch (e) { /* skip bad chunks */ }
-    pos = pos + length;
-  }
-  return chunks;
-}
-
-/**
- * Fetch one page from a shared album via batchexecute RPC.
- * Tries multiple RPC IDs and payload formats.
+ * Fetch one more page of photos from a Google Photos shared album via the
+ * internal batchexecute RPC (snAcKc method).
+ *
+ * Requires cookies forwarded from the initial page response and, ideally,
+ * the auth token (AH_uQ...) that Google embeds in the page HTML.
+ *
+ * Payload format (from real browser traffic analysis):
+ *   [["snAcKc", "[\"albumId\",\"authToken\",null,\"pageToken\",null]", null, "generic"]]
  */
 async function fetchNextPage(shareUrl, albumId, pageToken, cookies, authToken) {
-  const rpcIds = ['snAcKc', 'UJlKrf', 'gs3fp'];
-  const baseUrl = 'https://photos.google.com/_/PhotosUi/data/batchexecute?source-path=/share/&f.sid=-1&bl=boq_photos-shared-albums&hl=en&soc-app=5&soc-platform=1&soc-device=1&rt=c';
+  // Two payload formats to try — with and without auth token
+  const innerWithAuth = authToken
+    ? JSON.stringify([albumId, authToken, null, pageToken, null])
+    : null;
+  const innerNoAuth = JSON.stringify([albumId, pageToken, null, null, null, null, 1]);
+
+  const batchUrl = 'https://photos.google.com/_/PhotosUi/data/batchexecute?rpcids=snAcKc&source-path=/&f.sid=-1&bl=boq_photos-shared-albums&hl=en&soc-app=5&soc-platform=1&soc-device=1&rt=c';
 
   const commonHeaders = {
     'Content-Type': 'application/x-www-form-urlencoded',
@@ -233,61 +219,52 @@ async function fetchNextPage(shareUrl, albumId, pageToken, cookies, authToken) {
   };
   if (cookies) commonHeaders['Cookie'] = cookies;
 
-  console.log('fetchNextPage:' + (pageToken ? ' token=' + pageToken.slice(0,20) : ' token=null') + ' cookies=' + (cookies?'yes':'no') + ' auth=' + (authToken?'yes':'no'));
+  console.log(`fetchNextPage: albumId=${albumId ? albumId.slice(0, 20) : 'null'}... token=${pageToken ? pageToken.slice(0, 20) : 'null'}... cookies=${cookies ? 'yes' : 'no'} auth=${authToken ? 'yes' : 'no'}`);
 
-  for (const rpcId of rpcIds) {
-    const payloads = [JSON.stringify([albumId, pageToken, null, null, null, null, 1])];
-    if (authToken) {
-      payloads.push(JSON.stringify([albumId, authToken, null, pageToken, null]));
+  // Try with auth token first, then without
+  const payloads = innerWithAuth ? [innerWithAuth, innerNoAuth] : [innerNoAuth];
+  for (const inner of payloads) {
+    const rpcPayload = JSON.stringify([[['snAcKc', inner, null, 'generic']]]);
+    const bodyStr = 'f.req=' + encodeURIComponent(rpcPayload) + '&at=&';
+
+    let res;
+    try {
+      res = await fetch(batchUrl, { method: 'POST', headers: commonHeaders, body: bodyStr });
+    } catch (e) {
+      console.warn('fetchNextPage: network error:', e.message);
+      return { items: [], nextToken: null };
     }
 
-    for (const inner of payloads) {
-      const rpcPayload = JSON.stringify([[rpcId, inner, null, 'generic']]);
-      const bodyStr = 'f.req=' + encodeURIComponent(rpcPayload) + '&at=&';
-      const batchUrl = baseUrl + '&rpcids=' + rpcId;
+    if (!res.ok) {
+      console.warn(`fetchNextPage: HTTP ${res.status} with payload: ${inner.slice(0, 40)}...`);
+      continue; // try next payload format
+    }
 
-      let res;
-      try {
-        res = await fetch(batchUrl, { method: 'POST', headers: commonHeaders, body: bodyStr });
-      } catch (e) {
-        console.warn('fetchNextPage: network error: ' + e.message);
-        continue;
-      }
+    const text = await res.text();
+    const nlIdx = text.indexOf('\n');
+    if (nlIdx === -1) { console.warn('fetchNextPage: no newline in response'); continue; }
 
-      if (!res.ok) {
-        console.warn('fetchNextPage: HTTP ' + res.status + ' rpc=' + rpcId);
-        continue;
+    try {
+      const outer = JSON.parse(text.slice(nlIdx + 1));
+      for (const envelope of outer) {
+        if (!Array.isArray(envelope) || envelope[0] !== 'wrb.fr') continue;
+        const innerJson = envelope[2];
+        if (typeof innerJson !== 'string') continue;
+        const innerData = JSON.parse(innerJson);
+        const rawItems = Array.isArray(innerData[1]) ? innerData[1] : [];
+        const rawNextToken = innerData[2];
+        const nextToken = typeof rawNextToken === 'string' && rawNextToken.length > 5 ? rawNextToken : null;
+        console.log(`fetchNextPage ✓: got ${rawItems.length} items, nextToken=${nextToken ? nextToken.slice(0, 20) + '...' : 'null'}`);
+        return { items: rawItems, nextToken };
       }
-
-      const text = await res.text();
-      const chunks = parseChunks(text);
-      for (const chunk of chunks) {
-        if (!Array.isArray(chunk)) continue;
-        const wrb = Array.isArray(chunk[0]) && chunk[0][0] === 'wrb.fr' ? chunk[0] : chunk.find(function(e) { return Array.isArray(e) && e[0] === 'wrb.fr'; });
-        if (!wrb) continue;
-        const rawData = wrb[2];
-        if (typeof rawData === 'string') {
-          try {
-            const innerData = JSON.parse(rawData);
-            const rawItems = Array.isArray(innerData[1]) ? innerData[1] : (Array.isArray(innerData[0]) ? innerData[0] : []);
-            var rawNextToken = innerData[2] || null;
-            var nextToken = (typeof rawNextToken === 'string' && rawNextToken.length > 5) ? rawNextToken : null;
-            if (rawItems.length > 0 || nextToken) {
-              console.log('fetchNextPage OK rpc=' + rpcId + ' items=' + rawItems.length + ' next=' + (nextToken ? nextToken.slice(0,20)+'...' : 'null'));
-              return { items: rawItems, nextToken: nextToken };
-            }
-          } catch (e) { /* skip parse errors */ }
-        }
-        // Check error status
-        var st = wrb[5];
-        if (Array.isArray(st) && st[0] === 5) {
-          // error code 5 — try next RPC/payload
-        }
-      }
+      console.warn('fetchNextPage: no wrb.fr envelope in response');
+    } catch (e) {
+      console.warn('fetchNextPage: parse error:', e.message, 'response sample:', text.slice(0, 200));
     }
   }
   return { items: [], nextToken: null };
 }
+
 // ─── Core Album Fetcher ──────────────────────────────────────────────────────
 
 async function fetchAlbum(url) {

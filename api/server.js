@@ -222,7 +222,7 @@ function parseChunks(text) {
  */
 async function fetchNextPage(shareUrl, albumId, pageToken, cookies, authToken) {
   const rpcIds = ['snAcKc', 'UJlKrf', 'gs3fp'];
-  const baseUrl = 'https://photos.google.com/_/PhotosUi/data/batchexecute?source-path=/&f.sid=-1&bl=boq_photos-shared-albums&hl=en&soc-app=5&soc-platform=1&soc-device=1&rt=c';
+  const baseUrl = 'https://photos.google.com/_/PhotosUi/data/batchexecute?source-path=/share/&f.sid=-1&bl=boq_photos-shared-albums&hl=en&soc-app=5&soc-platform=1&soc-device=1&rt=c';
 
   const commonHeaders = {
     'Content-Type': 'application/x-www-form-urlencoded',
@@ -242,7 +242,7 @@ async function fetchNextPage(shareUrl, albumId, pageToken, cookies, authToken) {
     }
 
     for (const inner of payloads) {
-      const rpcPayload = JSON.stringify([[ [rpcId, inner, null, 'generic'] ]]);
+      const rpcPayload = JSON.stringify([[rpcId, inner, null, 'generic']]);
       const bodyStr = 'f.req=' + encodeURIComponent(rpcPayload) + '&at=&';
       const batchUrl = baseUrl + '&rpcids=' + rpcId;
 

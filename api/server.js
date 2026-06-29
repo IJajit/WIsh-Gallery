@@ -146,12 +146,15 @@ function extractImageUrls(html) {
 
         console.log(`ds:1: ${rawItems.length} items, data[0]=${JSON.stringify(data[0]).slice(0, 80)}, data[2]=${JSON.stringify(rawD2).slice(0, 80)}`);
 
-        // data[2] in shared albums is the AH_uQ... auth token for batchexecute
-        if (typeof rawD2 === 'string' && rawD2.startsWith('AH_uQ')) {
-          authToken = rawD2;
-          console.log(`ds:1: found authToken (${authToken.length} chars)`);
-        } else if (typeof rawD2 === 'string' && rawD2.length > 5) {
-          contToken = rawD2;
+        // data[2] serves as BOTH auth token for batchexecute AND continuation token
+        if (typeof rawD2 === 'string' && rawD2.length > 5) {
+          contToken = rawD2; // always treat as continuation token (original working behavior)
+          if (rawD2.startsWith('AH_uQ')) {
+            authToken = rawD2;
+            console.log(`ds:1: found authToken+contToken (${rawD2.length} chars)`);
+          } else {
+            console.log(`ds:1: found contToken (${rawD2.slice(0, 20)}...)`);
+          }
         }
 
         // data[3][0] = album ID, data[3][1] = album name

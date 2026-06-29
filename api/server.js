@@ -316,33 +316,39 @@ async function fetchAlbum(url) {
   // Use URL-extracted key as primary album ID for batchexecute
   const effectiveAlbumId = urlAlbumKey || albumId;
 
-  // Pagination:
-  // - authToken (AH_uQ...) is required for batchexecute to work
-  // - contToken is the page-continuation token
-  // - If we have authToken but no contToken, try fetching with just the album ID
-  const canPaginate = authToken && effectiveAlbumId;
-
-  if (canPaginate && contToken) {
-    console.log(`fetchAlbum: starting pagination from ${images.length} initial items (authToken=${authToken.slice(0,15)}...)`);
-    let pageToken = contToken;
+  // Pagination via batchexecute RPC (snAcKc):
+  // - authToken (AH_uQ...) is required for authenticated calls
+  // - We start with pageToken=null (first RPC page) and follow continuation tokens
+  // - Items from each page are de-duplicated by photoId
+  if (authToken && effectiveAlbumId) {
+    console.log(`fetchAlbum: starting batchexecute pagination from ${images.length} initial items (authToken=${authToken.slice(0,15)}...)`);
+    const seenIds = new Set(images.map(i => i.photoId));
+    let pageToken = null;
     let page = 1;
     const MAX_PAGES = 50;
 
-    while (pageToken && page <= MAX_PAGES) {
+    while (page <= MAX_PAGES) {
       const { items, nextToken } = await fetchNextPage(shareUrl, effectiveAlbumId, pageToken, cookieString, authToken);
-      if (items.length === 0) {
-        console.log(`fetchAlbum: pagination stopped at page ${page} (no items returned)`);
-        break;
+      const newItems = items.filter(item => {
+        const pid = Array.isArray(item) && typeof item[0] === 'string' ? item[0] : null;
+        return pid && !seenIds.has(pid);
+      });
+      if (newItems.length > 0) {
+        parseBatchItems(newItems, images, albumName);
+        newItems.forEach(item => {
+          const pid = Array.isArray(item) && typeof item[0] === 'string' ? item[0] : null;
+          if (pid) seenIds.add(pid);
+        });
       }
-      parseBatchItems(items, images, albumName);
-      console.log(`fetchAlbum: page ${page}: +${items.length} items (total ${images.length})`);
+      console.log(`fetchAlbum: page ${page}: raw=${items.length} new=${newItems.length} total=${images.length} nextToken=${nextToken ? nextToken.slice(0,20)+'...' : 'null'}`);
+      if (!nextToken) break;
       pageToken = nextToken;
       page++;
       await new Promise(r => setTimeout(r, 150));
     }
     console.log(`fetchAlbum: done — ${images.length} total from ${page} page(s)`);
   } else {
-    console.log(`fetchAlbum: no pagination. authToken=${authToken ? 'found' : 'missing'}, contToken=${contToken ? contToken.slice(0,20)+'...' : 'null'}, albumId=${effectiveAlbumId ? effectiveAlbumId.slice(0,20)+'...' : 'null'}. Returning ${images.length} items from initial page.`);
+    console.log(`fetchAlbum: no pagination. authToken=${authToken ? 'found' : 'missing'}, albumId=${effectiveAlbumId ? effectiveAlbumId.slice(0,20)+'...' : 'null'}. Returning ${images.length} items from initial page.`);
   }
 
   return { images, albumName };

@@ -119,22 +119,17 @@ function parseBatchItems(rawItems, out, albumName) {
 function extractImageUrls(html) {
   const images = [];
   let albumName = 'Google Photos Album';
+  // The AH_uQ... value at data[2] in ds:1 is Google's auth/session token for batchexecute
   let authToken = null;
+  // The actual page continuation token is stored differently (in data[0] nested)
   let contToken = null;
   let albumId = null;
 
   const blocks = extractCallbackBlocks(html);
-  console.log(`extractImageUrls: found ${blocks.length} callback blocks`);
 
   for (const fullBlock of blocks) {
     const inner = fullBlock.replace(/^AF_initDataCallback\(\{/, '').replace(/\}\s*\)\s*;$/, '');
     const block = inner;
-
-    // Log every block key for diagnostics
-    const keyMatch = block.match(/key:\s*['"]([^'"]+)['"]/);
-    if (keyMatch) {
-      console.log(`callback block key: ${keyMatch[1]} (length: ${block.length})`);
-    }
 
     // ds:1 — photo items + continuation tokens
     if (block.includes("key: 'ds:1'") || block.includes('key: "ds:1"')) {
@@ -146,12 +141,12 @@ function extractImageUrls(html) {
         const data = JSON.parse(dataStr);
         const rawItems = data[1] || [];
         const rawD2 = data[2];
+        // data[3] contains album metadata: [albumId, albumName, timestamps...]
         const meta = Array.isArray(data[3]) ? data[3] : null;
 
-        console.log(`ds:1: ${rawItems.length} items`);
-        console.log(`ds:1: data[0] type=${Array.isArray(data[0]) ? 'array['+data[0].length+']' : typeof data[0]}, preview=${JSON.stringify(data[0]).slice(0, 200)}`);
-        console.log(`ds:1: data[2] type=${typeof rawD2}, preview=${JSON.stringify(rawD2).slice(0, 100)}`);
+        console.log(`ds:1: ${rawItems.length} items, data[0]=${JSON.stringify(data[0]).slice(0, 80)}, data[2]=${JSON.stringify(rawD2).slice(0, 80)}`);
 
+        // data[2] in shared albums is the AH_uQ... auth token for batchexecute
         if (typeof rawD2 === 'string' && rawD2.startsWith('AH_uQ')) {
           authToken = rawD2;
           console.log(`ds:1: found authToken (${authToken.length} chars)`);
@@ -159,6 +154,7 @@ function extractImageUrls(html) {
           contToken = rawD2;
         }
 
+        // data[3][0] = album ID, data[3][1] = album name
         if (meta) {
           if (typeof meta[0] === 'string' && meta[0].length > 10) {
             albumId = meta[0];
@@ -170,27 +166,15 @@ function extractImageUrls(html) {
           }
         }
 
-        // Deep scan data[0] for continuation tokens
+        // Also scan data[0] for a page continuation token
         if (Array.isArray(data[0])) {
-          for (let i = 0; i < data[0].length; i++) {
+          for (let i = 0; i < Math.min(data[0].length, 10); i++) {
             const el = data[0][i];
             if (typeof el === 'string' && el.length > 20 && !el.startsWith('AH_uQ') && !el.startsWith('AF1Qip') && !el.startsWith('http')) {
               contToken = el;
-              console.log(`ds:1: found pageToken in data[0][${i}]: ${el.slice(0, 30)}...`);
+              console.log(`ds:1: found possible pageToken in data[0][${i}]: ${el.slice(0, 30)}...`);
               break;
             }
-            // Also check nested arrays in data[0]
-            if (Array.isArray(el)) {
-              for (let j = 0; j < el.length; j++) {
-                const sub = el[j];
-                if (typeof sub === 'string' && sub.length > 20 && !sub.startsWith('AH_uQ') && !sub.startsWith('AF1Qip') && !sub.startsWith('http')) {
-                  contToken = sub;
-                  console.log(`ds:1: found pageToken in data[0][${i}][${j}]: ${sub.slice(0, 30)}...`);
-                  break;
-                }
-              }
-            }
-            if (contToken) break;
           }
         }
 
@@ -199,37 +183,9 @@ function extractImageUrls(html) {
         console.error('JSON parse error in ds:1:', e.message);
       }
     }
-
-    // Also check ds:3 and other blocks for continuation tokens
-    if (block.includes("key: 'ds:3'") || block.includes('key: "ds:3"') ||
-        block.includes("key: 'ds:2'") || block.includes('key: "ds:2"')) {
-      const dataMatch = block.match(/data:(\[[\s\S]*)/);
-      if (dataMatch) {
-        try {
-          const dataStr = dataMatch[1].replace(/,?\s*sideChannel\s*:\s*\{[^}]*\}\s*$/, '');
-          const data = JSON.parse(dataStr);
-          const blockKey = keyMatch ? keyMatch[1] : 'unknown';
-          console.log(`${blockKey}: data preview=${JSON.stringify(data).slice(0, 300)}`);
-
-          // Deep scan for continuation tokens in any block
-          const scanForToken = (obj, path) => {
-            if (typeof obj === 'string' && obj.length > 20 && obj.length < 500 && !obj.startsWith('http') && !obj.startsWith('AF1Qip') && !obj.startsWith('AH_uQ')) {
-              console.log(`${blockKey}: potential token at ${path}: ${obj.slice(0, 30)}...`);
-              if (!contToken) contToken = obj;
-            }
-            if (Array.isArray(obj)) {
-              obj.forEach((el, i) => scanForToken(el, `${path}[${i}]`));
-            }
-          };
-          scanForToken(data, blockKey);
-        } catch (e) {
-          // Not all blocks are valid JSON arrays
-        }
-      }
-    }
   }
 
-  console.log(`extractImageUrls result: ${images.length} images, contToken=${contToken ? 'found' : 'null'}, authToken=${authToken ? 'found' : 'null'}, albumId=${albumId ? albumId.slice(0,20)+'...' : 'null'}`);
+  console.log(`extractImageUrls: ${images.length} images, contToken=${contToken ? contToken.slice(0,20)+'...' : 'null'}, authToken=${authToken ? 'found' : 'null'}, albumId=${albumId ? albumId.slice(0,20)+'...' : 'null'}`);
   return { images, albumName, contToken, albumId, authToken };
 }
 
@@ -246,6 +202,7 @@ function extractImageUrls(html) {
  *   [["snAcKc", "[\"albumId\",\"authToken\",null,\"pageToken\",null]", null, "generic"]]
  */
 async function fetchNextPage(shareUrl, albumId, pageToken, cookies, authToken) {
+  // Two payload formats to try — with and without auth token
   const innerWithAuth = authToken
     ? JSON.stringify([albumId, authToken, null, pageToken, null])
     : null;
@@ -264,6 +221,7 @@ async function fetchNextPage(shareUrl, albumId, pageToken, cookies, authToken) {
 
   console.log(`fetchNextPage: albumId=${albumId ? albumId.slice(0, 20) : 'null'}... token=${pageToken ? pageToken.slice(0, 20) : 'null'}... cookies=${cookies ? 'yes' : 'no'} auth=${authToken ? 'yes' : 'no'}`);
 
+  // Try with auth token first, then without
   const payloads = innerWithAuth ? [innerWithAuth, innerNoAuth] : [innerNoAuth];
   for (const inner of payloads) {
     const rpcPayload = JSON.stringify([[['snAcKc', inner, null, 'generic']]]);
@@ -279,12 +237,12 @@ async function fetchNextPage(shareUrl, albumId, pageToken, cookies, authToken) {
 
     if (!res.ok) {
       console.warn(`fetchNextPage: HTTP ${res.status} with payload: ${inner.slice(0, 40)}...`);
-      continue;
+      continue; // try next payload format
     }
 
     const text = await res.text();
     const nlIdx = text.indexOf('\n');
-    if (nlIdx === -1) { console.warn('fetchNextPage: no newline in response, length=' + text.length); continue; }
+    if (nlIdx === -1) { console.warn('fetchNextPage: no newline in response'); continue; }
 
     try {
       const outer = JSON.parse(text.slice(nlIdx + 1));
@@ -296,10 +254,10 @@ async function fetchNextPage(shareUrl, albumId, pageToken, cookies, authToken) {
         const rawItems = Array.isArray(innerData[1]) ? innerData[1] : [];
         const rawNextToken = innerData[2];
         const nextToken = typeof rawNextToken === 'string' && rawNextToken.length > 5 ? rawNextToken : null;
-        console.log(`fetchNextPage ✓: got ${rawItems.length} items, hasNextToken=${!!nextToken}`);
+        console.log(`fetchNextPage ✓: got ${rawItems.length} items, nextToken=${nextToken ? nextToken.slice(0, 20) + '...' : 'null'}`);
         return { items: rawItems, nextToken };
       }
-      console.warn('fetchNextPage: no wrb.fr envelope in response, outer length=' + outer.length);
+      console.warn('fetchNextPage: no wrb.fr envelope in response');
     } catch (e) {
       console.warn('fetchNextPage: parse error:', e.message, 'response sample:', text.slice(0, 200));
     }
@@ -309,7 +267,7 @@ async function fetchNextPage(shareUrl, albumId, pageToken, cookies, authToken) {
 
 // ─── Core Album Fetcher ──────────────────────────────────────────────────────
 
-async function fetchAlbum(url, oauthToken) {
+async function fetchAlbum(url) {
   // Resolve short URLs (photos.app.goo.gl)
   let shareUrl = url;
   if (url.includes('photos.app.goo.gl')) {
@@ -333,16 +291,13 @@ async function fetchAlbum(url, oauthToken) {
   if (urlAlbumKey) console.log(`fetchAlbum: album key from URL: ${urlAlbumKey.slice(0, 30)}...`);
 
   console.log(`fetchAlbum: fetching initial page from ${shareUrl}`);
-  const fetchHeaders = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-    'Accept-Language': 'en-US,en;q=0.9',
-  };
-  if (oauthToken) {
-    fetchHeaders['Authorization'] = `Bearer ${oauthToken}`;
-    console.log('fetchAlbum: including OAuth token in request');
-  }
-  const pageRes = await fetch(shareUrl, { headers: fetchHeaders });
+  const pageRes = await fetch(shareUrl, {
+    headers: {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+      'Accept-Language': 'en-US,en;q=0.9',
+    }
+  });
 
   // Capture cookies set by Google for use in subsequent requests
   const rawCookies = pageRes.headers.get('set-cookie');
@@ -361,38 +316,33 @@ async function fetchAlbum(url, oauthToken) {
   // Use URL-extracted key as primary album ID for batchexecute
   const effectiveAlbumId = urlAlbumKey || albumId;
 
-  // Pagination via batchexecute RPC:
+  // Pagination:
   // - authToken (AH_uQ...) is required for batchexecute to work
-  // - We start with pageToken=null (first page) and follow continuation tokens
-  // - Items are de-duplicated by photoId
-  if (authToken && effectiveAlbumId) {
-    console.log(`fetchAlbum: starting batchexecute pagination from ${images.length} initial items (authToken=${authToken.slice(0,15)}...)`);
-    const seenIds = new Set(images.map(i => i.photoId));
-    let pageToken = null;
-    let page = 1;
+  // - contToken is the page-continuation token
+  // - If we have authToken but no contToken, try fetching with just the album ID
+  const canPaginate = authToken && effectiveAlbumId;
 
-    while (true) {
+  if (canPaginate && contToken) {
+    console.log(`fetchAlbum: starting pagination from ${images.length} initial items (authToken=${authToken.slice(0,15)}...)`);
+    let pageToken = contToken;
+    let page = 1;
+    const MAX_PAGES = 50;
+
+    while (pageToken && page <= MAX_PAGES) {
       const { items, nextToken } = await fetchNextPage(shareUrl, effectiveAlbumId, pageToken, cookieString, authToken);
-      const newItems = items.filter(item => {
-        const pid = Array.isArray(item) && typeof item[0] === 'string' ? item[0] : null;
-        return pid && !seenIds.has(pid);
-      });
-      if (newItems.length > 0) {
-        parseBatchItems(newItems, images, albumName);
-        newItems.forEach(item => {
-          const pid = Array.isArray(item) && typeof item[0] === 'string' ? item[0] : null;
-          if (pid) seenIds.add(pid);
-        });
+      if (items.length === 0) {
+        console.log(`fetchAlbum: pagination stopped at page ${page} (no items returned)`);
+        break;
       }
-      console.log(`fetchAlbum: page ${page}: raw=${items.length} new=${newItems.length} total=${images.length} nextToken=${nextToken ? nextToken.slice(0, 20) + '...' : 'null'}`);
-      if (!nextToken) break;
+      parseBatchItems(items, images, albumName);
+      console.log(`fetchAlbum: page ${page}: +${items.length} items (total ${images.length})`);
       pageToken = nextToken;
       page++;
       await new Promise(r => setTimeout(r, 150));
     }
     console.log(`fetchAlbum: done — ${images.length} total from ${page} page(s)`);
   } else {
-    console.log(`fetchAlbum: no pagination. authToken=${authToken ? 'found' : 'missing'}, albumId=${effectiveAlbumId ? effectiveAlbumId.slice(0,20)+'...' : 'null'}. Returning ${images.length} items from initial page.`);
+    console.log(`fetchAlbum: no pagination. authToken=${authToken ? 'found' : 'missing'}, contToken=${contToken ? contToken.slice(0,20)+'...' : 'null'}, albumId=${effectiveAlbumId ? effectiveAlbumId.slice(0,20)+'...' : 'null'}. Returning ${images.length} items from initial page.`);
   }
 
   return { images, albumName };
@@ -467,7 +417,7 @@ function selectImages(images, limit = 200) {
 // ─── API Routes ──────────────────────────────────────────────────────────────
 
 app.post('/api/parse-album', async (req, res) => {
-  const { url, urls: inputUrls, token } = req.body;
+  const { url, urls: inputUrls } = req.body;
   const urls = inputUrls || (url ? [url] : []);
 
   if (urls.length === 0) {
@@ -482,7 +432,7 @@ app.post('/api/parse-album', async (req, res) => {
         continue;
       }
       try {
-        const { images } = await fetchAlbum(albumUrl, token);
+        const { images } = await fetchAlbum(albumUrl);
         allImages.push(...images);
       } catch (err) {
         console.error(`Error fetching album ${albumUrl}:`, err);
@@ -507,44 +457,6 @@ app.post('/api/parse-album', async (req, res) => {
   } catch (err) {
     console.error('Parse album error:', err);
     res.status(500).json({ error: 'Could not fetch albums.' });
-  }
-});
-
-// ─── Google Photos Library API Proxy ──────────────────────────────────────────
-// Proxies requests to photoslibrary.googleapis.com to avoid CORS issues
-app.all('/api/google-photos/*', async (req, res) => {
-  const authHeader = req.headers.authorization;
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    return res.status(401).json({ error: 'Missing Authorization header' });
-  }
-
-  const apiPath = req.url.replace(/^\/api\/google-photos/, '');
-  const apiUrl = 'https://photoslibrary.googleapis.com/v1' + apiPath;
-
-  console.log(`google-photos-proxy: ${req.method} ${apiUrl}`);
-
-  try {
-    const headers = {
-      'Authorization': authHeader,
-      'Content-Type': 'application/json',
-    };
-
-    const fetchOptions = { method: req.method, headers };
-    if (req.method !== 'GET' && req.method !== 'HEAD') {
-      fetchOptions.body = JSON.stringify(req.body);
-    }
-
-    const apiRes = await fetch(apiUrl, fetchOptions);
-    const data = await apiRes.json();
-
-    if (!apiRes.ok) {
-      console.log(`google-photos-proxy: error ${apiRes.status}`, JSON.stringify(data).slice(0, 200));
-    }
-
-    res.status(apiRes.status).json(data);
-  } catch (err) {
-    console.error('google-photos-proxy error:', err.message);
-    res.status(500).json({ error: err.message });
   }
 });
 

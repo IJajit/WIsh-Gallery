@@ -128,7 +128,7 @@ export default function Controls({
                   id="count-range-input"
                   type="range"
                   min="10"
-                  max="500"
+                  max="200"
                   step="10"
                   value={carouselCount}
                   onChange={(e) => setCarouselCount(Number(e.target.value))}

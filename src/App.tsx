@@ -5,17 +5,16 @@
 
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { X, ArrowLeft, ArrowRight, Link2, Upload, Trash2, FolderPlus, Heart, Menu, Image, Shuffle, Loader2, LogIn, LogOut, FileJson } from 'lucide-react';
+import { X, ArrowLeft, ArrowRight, Link2, Upload, Trash2, FolderPlus, Heart, Menu, Image, Shuffle, Loader2, LogIn, LogOut } from 'lucide-react';
 import { getGalleryItems } from './data';
 import { ImageItem, CarouselMode } from './types';
 import Carousel3D from './components/Carousel3D';
 import Controls from './components/Controls';
 import {
-  isGoogleAuthSupported,
   isGoogleSignedIn,
-  getGoogleAccessToken,
   signInWithGoogle,
   signOutGoogle,
+  getGoogleAccessToken,
   syncAlbumViaOAuth,
 } from './googlePhotos';
 
@@ -84,7 +83,7 @@ export default function App() {
   const [activeImage, setActiveImage] = useState<ImageItem | null>(null);
   const [selectedImage, setSelectedImage] = useState<ImageItem | null>(null);
   const [gallerySource, setGallerySource] = useState<'default' | 'wish'>('wish');
-  const [carouselCount, setCarouselCount] = useState<number>(500);
+  const [carouselCount, setCarouselCount] = useState<number>(200);
 
   const [wishAlbums, setWishAlbums] = useState<WishAlbum[]>(() => {
     try {
@@ -129,8 +128,7 @@ export default function App() {
       const saved = localStorage.getItem('wish_gphotos_album_urls');
       if (saved) { const p = JSON.parse(saved); if (Array.isArray(p) && p.length > 0 && p.some((u: string) => u.trim().length > 0)) return p; }
     } catch {}
-    // Default: pre-fill with the Shelter album URL so it's always ready
-    return ['https://photos.google.com/share/AF1QipPT1a7sLoXSf_PNGMoSpMw_pk9M0UDoCUPrCqrIr1PHuU8j7C-znnVG7eR4y0rdUg?key=UjRVaEdmci1tR0tRajZxcm51aTA4UnlZeUp3WUl3'];
+    return [''];
   });
   const [albumLoading, setAlbumLoading] = useState<boolean>(false);
   const [albumError, setAlbumError] = useState<string>('');
@@ -146,7 +144,19 @@ export default function App() {
   const [syncStats, setSyncStats] = useState<{ totalAll: number; uniqueDays: number; selectedCount: number; usedDays: number; videoCount?: number } | null>(null);
   const syncStatsTimerRef = useRef<ReturnType<typeof setTimeout>>();
   const [googleSignedIn, setGoogleSignedIn] = useState<boolean>(isGoogleSignedIn());
-  const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID || '';
+  const [googleClientId, setGoogleClientId] = useState<string>('');
+  const [syncDiagnostics, setSyncDiagnostics] = useState<string[]>([]);
+
+  const [scrapeServiceUrl, setScrapeServiceUrl] = useState<string>('');
+  useEffect(() => {
+    fetch('/api/config')
+      .then(r => r.json())
+      .then(cfg => {
+        if (cfg.googleClientId) setGoogleClientId(cfg.googleClientId);
+        if (cfg.scrapeServiceUrl) setScrapeServiceUrl(cfg.scrapeServiceUrl);
+      })
+      .catch(() => {});
+  }, []);
 
   const showSyncStats = (stats: typeof syncStats) => {
     setSyncStats(stats);
@@ -156,6 +166,7 @@ export default function App() {
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const wishPanelRef = useRef<HTMLDivElement>(null);
+  const abortControllerRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
     if (!isPhotosPanelOpen) return;
@@ -276,14 +287,14 @@ export default function App() {
   };
 
   const handleGoogleSignIn = async () => {
-    if (!GOOGLE_CLIENT_ID) {
-      setAlbumError('Google Client ID not configured. Add VITE_GOOGLE_CLIENT_ID to your .env file.');
+    if (!googleClientId) {
+      setAlbumError('Google Client ID not configured. Add GOOGLE_CLIENT_ID env var in Vercel dashboard.');
       return;
     }
     try {
       setAlbumLoading(true);
       setAlbumError('');
-      await signInWithGoogle(GOOGLE_CLIENT_ID);
+      await signInWithGoogle(googleClientId);
       setGoogleSignedIn(true);
     } catch (err: any) {
       setAlbumError(err.message || 'Google sign-in failed.');
@@ -304,158 +315,118 @@ export default function App() {
     setLastSyncedAlbumUrls([]);
     setAlbumError('');
     setSyncStats(null);
+    setSyncDiagnostics([]);
     localStorage.removeItem('wish_gphotos_album_urls');
     localStorage.removeItem('wish_gphotos_last_urls');
   };
 
   const handleSyncAlbum = async () => {
+    if (albumLoading) {
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort();
+        abortControllerRef.current = null;
+      }
+      setAlbumLoading(false);
+      setAlbumError('Sync cancelled by user.');
+      return;
+    }
+
     const validUrls = albumUrls.map(u => u.trim()).filter(u => u.length > 0);
     if (validUrls.length === 0) return;
     setAlbumLoading(true);
     setAlbumError('');
+    setSyncDiagnostics([]);
 
-    // Try Google OAuth API first if signed in
-    if (googleSignedIn && validUrls.length === 1) {
-      try {
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+
+    try {
+      if (googleSignedIn) {
         const token = getGoogleAccessToken();
         if (!token) {
-          setGoogleSignedIn(false);
-          throw new Error('Token expired. Please sign in again.');
+          setAlbumError('Google sign-in expired. Please sign in again.');
+          setAlbumLoading(false);
+          return;
         }
-        const { images, albumName, stats, diagnostic } = await syncAlbumViaOAuth(
-          token,
-          validUrls[0]
-        );
-        // Log diagnostic info for debugging
-        console.log('[OAuth] Diagnostic:', diagnostic.join('\n  '));
-        if (images.length > 0) {
-          const newItems = images.map((img: any, i: number) => ({
-            id: `google-photos-${Date.now()}-${i}`,
-            url: img.url,
-            title: img.title || albumName,
-            author: 'Google Photos',
-            category: 'Synced',
-            description: img.description || 'Imported from Google Photos.',
-            timestamp: img.timestamp || undefined,
-            isVideo: img.isVideo || undefined,
-            videoUrl: img.videoUrl || undefined,
-          }));
+
+        let allNewItems: ImageItem[] = [];
+        let lastStats: any = null;
+
+        for (const url of validUrls) {
+          if (controller.signal.aborted) {
+            throw new DOMException('Aborted', 'AbortError');
+          }
+          try {
+            const result = await syncAlbumViaOAuth(token, url, controller.signal);
+            if (controller.signal.aborted) {
+              throw new DOMException('Aborted', 'AbortError');
+            }
+            const diag = result.diagnostic || [];
+            setSyncDiagnostics(diag);
+            if (result.images.length > 0) {
+              const items = result.images.map((img: any, i: number) => ({
+                id: `google-photos-${Date.now()}-${i}`,
+                url: img.url,
+                title: img.title || 'Google Photos',
+                author: 'Google Photos',
+                category: 'Synced',
+                description: img.description || 'Imported from Google Photos shared album.',
+                timestamp: img.timestamp || undefined,
+                isVideo: img.isVideo || undefined,
+                videoUrl: img.videoUrl || undefined,
+              }));
+              allNewItems.push(...items);
+              lastStats = result.stats;
+            }
+          } catch (err: any) {
+            if (err.name === 'AbortError' || controller.signal.aborted) {
+              throw err;
+            }
+            console.error(`[Sync] OAuth error for ${url}:`, err);
+            setSyncDiagnostics(prev => [...prev, `❌ OAuth error: ${err.message || err}`]);
+          }
+        }
+
+        if (controller.signal.aborted) {
+          throw new DOMException('Aborted', 'AbortError');
+        }
+
+        if (allNewItems.length > 0) {
           setWishAlbums(prev => prev.map(album => {
             if (album.id !== activeWishAlbumId) return album;
             const nonSynced = album.items.filter(item => !item.id.startsWith('google-photos-'));
-            return { ...album, items: [...newItems, ...nonSynced] };
+            return { ...album, items: [...allNewItems, ...nonSynced] };
           }));
           setGallerySource('wish');
           setLastSyncedAlbumUrls(validUrls);
-          setAlbumError('');
-          if (stats) showSyncStats(stats);
+          if (lastStats) showSyncStats(lastStats);
           return;
         }
-        // OAuth returned 0 items — show diagnostic info
-        const diagLines = diagnostic.filter(d => d.startsWith('❌') || d.startsWith('⚠') || d.startsWith('✅'));
-        setAlbumError(
-          'OAuth found no photos. ' +
-          diagLines.slice(0, 3).join(' | ') +
-          ' | Try: Open the album in Google Photos, click "Save to library", then Sync again.'
-        );
-        // Fall through to scraping which gets 300 photos
-      } catch (err: any) {
-        const msg = err.message || '';
-        if (msg.includes('403') || msg.includes('insufficient') || msg.includes('scopes')) {
-          setAlbumError('Google API permission error. Try signing out and signing in again to re-authorize.');
-          return;
-        }
-        console.warn('OAuth sync failed, falling back to scraping:', msg);
+
+        throw new Error('No photos could be retrieved. Make sure the album is shared with your Google account.');
+      } else {
+        throw new Error('Please sign in with Google to sync external albums.');
       }
-    }
-    try {
-      const token = getGoogleAccessToken();
-      const res = await fetch('/api/parse-album?_=' + Date.now(), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ urls: validUrls, token: token || undefined }),
-      });
-      const data = await res.json();
-      if (!res.ok || data.error) {
-        setAlbumError(data.error || 'Could not fetch albums.');
-        return;
+    } catch (err: any) {
+      if (err.name === 'AbortError') {
+        setAlbumError('Sync cancelled.');
+      } else {
+        setAlbumError(err?.message || 'Sync failed. Try again.');
       }
-      if (!data.images || data.images.length === 0) {
-        setAlbumError('No photos found in these albums.');
-        return;
-      }
-      const videoItems = data.images.filter((img: any) => img.isVideo);
-      console.log(`Sync: got ${data.images.length} items, ${videoItems.length} videos`);
-      videoItems.forEach((v: any, i: number) => console.log(`  video[${i}]: url=${(v.url||'').slice(0,50)}..., videoUrl=${(v.videoUrl||'').slice(0,50)}..., isVideo=${v.isVideo}`));
-      const newItems = data.images.map((img: any, i: number) => ({
-        id: `google-photos-${Date.now()}-${i}`,
-        url: img.url,
-        title: img.title || 'Google Photos',
-        author: 'Google Photos',
-        category: 'Synced',
-        description: img.description || 'Imported from Google Photos shared album.',
-        timestamp: img.timestamp || undefined,
-        location: img.location || undefined,
-        isVideo: img.isVideo || undefined,
-        videoUrl: img.videoUrl || undefined,
-      }));
-      setWishAlbums(prev => prev.map(album => {
-        if (album.id !== activeWishAlbumId) return album;
-        const nonSynced = album.items.filter(item => !item.id.startsWith('google-photos-'));
-        return { ...album, items: [...newItems, ...nonSynced] };
-      }));
-      setGallerySource('wish');
-      setLastSyncedAlbumUrls(validUrls);
-      if (data.stats) showSyncStats(data.stats);
-    } catch {
-      setAlbumError('Could not connect to server. Make sure the API is running.');
     } finally {
+      if (abortControllerRef.current === controller) {
+        abortControllerRef.current = null;
+      }
       setAlbumLoading(false);
     }
-  };
-
-  const jsonInputRef = useRef<HTMLInputElement>(null);
-  const handleJsonImport = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = (ev) => {
-      try {
-        const items = JSON.parse(ev.target?.result as string);
-        if (!Array.isArray(items)) { setAlbumError('Invalid JSON format — expected an array.'); return; }
-        const newItems = items.map((img: any, i: number) => ({
-          id: `google-photos-${Date.now()}-${i}`,
-          url: img.url || img.originalUrl || '',
-          title: img.title || img.alt || 'Google Photos',
-          author: 'Google Photos',
-          category: 'Synced',
-          description: 'Imported from Google Photos album.',
-          timestamp: img.timestamp || undefined,
-          isVideo: img.isVideo || undefined,
-          videoUrl: img.videoUrl || undefined,
-        })).filter((img: any) => img.url);
-        setWishAlbums(prev => prev.map(album => {
-          if (album.id !== activeWishAlbumId) return album;
-          const nonSynced = album.items.filter(item => !item.id.startsWith('google-photos-'));
-          return { ...album, items: [...newItems, ...nonSynced] };
-        }));
-        setGallerySource('wish');
-        setAlbumError('');
-        setAlbumLoading(false);
-      } catch (err: any) {
-        setAlbumError('Failed to parse JSON file: ' + err.message);
-      }
-    };
-    reader.readAsText(file);
-    e.target.value = '';
   };
 
   const refreshStartRef = useRef<number>(0);
 
   const handleRefreshPhotos = async () => {
     if (albumLoading) return;
-    const syncedCount = activeWishAlbum.items.filter(i => i.id.startsWith('google-photos-')).length;
-    if (syncedCount === 0) return;
+    const totalItems = activeWishAlbum ? activeWishAlbum.items.length : 0;
+    if (totalItems === 0) return;
     refreshStartRef.current = Date.now();
     setAlbumLoading(true);
     // Just reshuffle locally — pick a new random 200 from the already-synced pool
@@ -588,12 +559,30 @@ export default function App() {
                         <input
                           type="text"
                           required
+                          autoFocus
                           placeholder="e.g. Shelter, Living Room"
                           value={newAlbumName}
                           onChange={(e) => setNewAlbumName(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Escape') {
+                              setIsCreatingAlbum(false);
+                              setNewAlbumName('');
+                            }
+                          }}
                           className="flex-1 text-[11px] font-mono px-2 py-1 bg-transparent text-neutral-800 focus:outline-none placeholder:text-neutral-300"
                         />
-                        <button type="submit" className="bg-black hover:bg-neutral-900 text-white text-[9px] px-3 py-1.5 font-mono font-bold uppercase rounded-md cursor-pointer transition-colors">Create</button>
+                        <button type="submit" className="bg-black hover:bg-neutral-900 text-white text-[9px] px-2.5 py-1.5 font-mono font-bold uppercase rounded-md cursor-pointer transition-colors">Create</button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setIsCreatingAlbum(false);
+                            setNewAlbumName('');
+                          }}
+                          className="bg-neutral-100 hover:bg-neutral-200 text-neutral-600 text-[9px] px-2.5 py-1.5 font-mono font-bold uppercase rounded-md cursor-pointer transition-colors"
+                          title="Cancel creation (Escape)"
+                        >
+                          Cancel
+                        </button>
                       </form>
                     ) : (
                       <div className="flex overflow-x-auto gap-2.5 custom-scrollbar pb-1">
@@ -706,7 +695,7 @@ export default function App() {
                         </div>
                         
                         <div className="px-4 pb-4 pt-2 space-y-3">
-                          {GOOGLE_CLIENT_ID && !googleSignedIn ? (
+                          {googleClientId && !googleSignedIn ? (
                             <div className="flex flex-col items-center gap-3 py-3">
                               <div className="w-8 h-8 rounded-full bg-neutral-100 flex items-center justify-center">
                                 <LogIn size={14} className="text-neutral-500" />
@@ -735,15 +724,15 @@ export default function App() {
                             </div>
                           ) : (
                             <>
-                              {GOOGLE_CLIENT_ID && googleSignedIn && (
+                              {googleClientId && googleSignedIn && (
                                 <div className="flex items-center gap-2 pb-2 border-b border-[#cfc4c5]/30">
                                   <div className="flex items-center gap-1.5 flex-1">
-                                    <div className="w-2 h-2 bg-emerald-500 rounded-full" />
-                                    <span className="text-[9px] font-mono text-neutral-500 uppercase tracking-wider">Google Connected — Full Album Access</span>
+                                    <div className="w-1.5 h-1.5 bg-emerald-500 rounded-full" />
+                                    <span className="text-[8px] font-mono text-neutral-500 uppercase tracking-wider">Connected to Google</span>
                                   </div>
                                   <button
                                     onClick={handleGoogleSignOut}
-                                    className="text-[9px] font-mono text-neutral-400 hover:text-red-500 uppercase tracking-wider flex items-center gap-1 cursor-pointer transition-colors"
+                                    className="text-[8px] font-mono text-neutral-400 hover:text-red-500 uppercase tracking-wider flex items-center gap-1 cursor-pointer transition-colors"
                                   >
                                     <LogOut size={10} />
                                     <span>Sign Out</span>
@@ -751,10 +740,12 @@ export default function App() {
                                 </div>
                               )}
 
-                              {!GOOGLE_CLIENT_ID && (
+                              {!googleClientId && (
                                 <div className="flex items-center gap-2 pb-2 border-b border-[#cfc4c5]/30">
                                   <div className="w-2 h-2 bg-amber-500 rounded-full" />
-                                  <span className="text-[8px] font-mono text-neutral-500 uppercase tracking-wider">No Google config — limited to 300 photos (scrape only)</span>
+                                  <span className="text-[8px] font-mono text-neutral-500 uppercase tracking-wider leading-relaxed">
+                                    Google Client ID not set. Add GOOGLE_CLIENT_ID to your env and configure OAuth at console.cloud.google.com.
+                                  </span>
                                 </div>
                               )}
 
@@ -769,6 +760,7 @@ export default function App() {
                                       next[idx] = e.target.value;
                                       setAlbumUrls(next);
                                       setAlbumError('');
+                                      setSyncDiagnostics([]);
                                     }}
                                     className="w-full bg-white border border-[#cfc4c5] rounded-lg pl-3.5 pr-9 py-3 font-mono text-[10px] focus:outline-none focus:border-black placeholder:text-neutral-300 shadow-sm animate-fade-in"
                                   />
@@ -777,6 +769,7 @@ export default function App() {
                                       onClick={() => {
                                         setAlbumUrls(prev => prev.filter((_, i) => i !== idx));
                                         setAlbumError('');
+                                        setSyncDiagnostics([]);
                                       }}
                                       className="absolute right-3 top-1/2 -translate-y-1/2 text-neutral-400 hover:text-red-500 transition-colors text-[10px] font-mono font-bold cursor-pointer"
                                     >
@@ -788,7 +781,7 @@ export default function App() {
                               
                               <div className="grid grid-cols-2 gap-2 mt-2">
                                 <button
-                                  onClick={() => { setAlbumUrls(prev => [...prev, '']); setAlbumError(''); }}
+                                  onClick={() => { setAlbumUrls(prev => [...prev, '']); setAlbumError(''); setSyncDiagnostics([]); }}
                                   className="bg-white border border-[#cfc4c5] hover:border-black text-black py-3 text-[9px] font-mono font-bold uppercase rounded-lg flex items-center justify-center gap-1 tracking-wider cursor-pointer transition-colors"
                                 >
                                   <span>Add another link</span>
@@ -796,13 +789,12 @@ export default function App() {
 
                                 <button
                                   onClick={handleSyncAlbum}
-                                  disabled={albumLoading}
-                                  className="bg-black hover:bg-neutral-900 text-white py-3 text-[10px] font-mono font-bold uppercase tracking-widest rounded-lg flex items-center justify-center gap-2 cursor-pointer disabled:cursor-not-allowed transition-colors"
+                                  className="bg-black hover:bg-neutral-900 text-white py-3 text-[10px] font-mono font-bold uppercase tracking-widest rounded-lg flex items-center justify-center gap-2 cursor-pointer transition-colors"
                                 >
                                   {albumLoading ? (
                                     <>
                                       <span className="block w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                                      <span>SYNCING...</span>
+                                      <span>CANCEL SYNC</span>
                                     </>
                                   ) : (
                                     <span>SYNC</span>
@@ -810,19 +802,8 @@ export default function App() {
                                 </button>
                               </div>
 
-                              <div className="mt-2 pt-2 border-t border-[#cfc4c5]/20">
-                                <button
-                                  onClick={() => jsonInputRef.current?.click()}
-                                  className="w-full border border-dashed border-[#cfc4c5] hover:border-black text-neutral-500 hover:text-black py-2.5 text-[8px] font-mono font-bold uppercase rounded-lg flex items-center justify-center gap-1.5 tracking-wider cursor-pointer transition-colors"
-                                >
-                                  <FileJson size={11} />
-                                  <span>IMPORT JSON (all-photos.json)</span>
-                                </button>
-                                <input ref={jsonInputRef} type="file" accept=".json" className="hidden" onChange={handleJsonImport} />
-                              </div>
-
                               {albumError && (
-                                <p className="text-[9px] font-mono text-red-500 mt-1">{albumError}</p>
+                                <p className="text-[9px] font-mono text-red-500 mt-1 leading-relaxed">{albumError}</p>
                               )}
                             </>
                           )}

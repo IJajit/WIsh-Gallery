@@ -2,8 +2,11 @@ import express from 'express';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import fs from 'fs';
+import dotenv from 'dotenv';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+dotenv.config({ path: path.join(__dirname, '../.env.local') });
+
 const app = express();
 const PORT = process.env.PORT || 4000;
 
@@ -169,13 +172,23 @@ function extractImageUrls(html) {
           }
         }
 
-        // Also scan data[0] for a page continuation token
+        // Also scan data[0] for a page continuation token — Google Photos stores it in data[0][0] or data[0][1] often
         if (Array.isArray(data[0])) {
-          for (let i = 0; i < Math.min(data[0].length, 10); i++) {
+          for (let i = 0; i < Math.min(data[0].length, 5); i++) {
             const el = data[0][i];
-            if (typeof el === 'string' && el.length > 20 && !el.startsWith('AH_uQ') && !el.startsWith('AF1Qip') && !el.startsWith('http')) {
+            if (typeof el === 'string' && el.length > 20 && !el.startsWith('AH_uQ') && !el.startsWith('AF1Qip') && !el.startsWith('http') && !el.includes('googleusercontent')) {
               contToken = el;
-              console.log(`ds:1: found possible pageToken in data[0][${i}]: ${el.slice(0, 30)}...`);
+              console.log(`ds:1: found pageToken in data[0][${i}]: ${el.slice(0, 30)}...`);
+              break;
+            }
+          }
+        }
+        // Fallback: check data[0][0] directly if it's an array containing the token
+        if (!contToken && Array.isArray(data[0]) && data[0].length > 0 && Array.isArray(data[0][0])) {
+          for (const nested of data[0][0]) {
+            if (typeof nested === 'string' && nested.length > 20 && !nested.startsWith('AH_uQ') && !nested.startsWith('AF1Qip') && !nested.startsWith('http')) {
+              contToken = nested;
+              console.log(`ds:1: found pageToken in data[0][0] nested: ${nested.slice(0, 30)}...`);
               break;
             }
           }
@@ -305,13 +318,24 @@ async function fetchAlbum(url) {
   let shareUrl = url;
   if (url.includes('photos.app.goo.gl')) {
     try {
-      const redirectRes = await fetch(url, {
-        method: 'HEAD',
+      let redirectRes = await fetch(url, {
+        method: 'GET',
         redirect: 'manual',
         headers: { 'User-Agent': 'Mozilla/5.0' }
       });
-      const location = redirectRes.headers.get('location');
-      if (location) shareUrl = location;
+      if ([301, 302, 303, 307, 308].includes(redirectRes.status)) {
+        const location = redirectRes.headers.get('location');
+        if (location) shareUrl = new URL(location, url).toString();
+      } else {
+        // Fallback: follow redirect
+        redirectRes = await fetch(url, {
+          method: 'GET',
+          redirect: 'follow',
+          headers: { 'User-Agent': 'Mozilla/5.0' }
+        });
+        if (redirectRes.url) shareUrl = redirectRes.url;
+      }
+      console.log(`fetchAlbum: resolved shortened URL to: ${shareUrl}`);
     } catch (e) {
       console.warn('fetchAlbum: could not resolve short URL:', e.message);
     }
@@ -571,6 +595,221 @@ app.get('/api/video-proxy', async (req, res) => {
     }
   } catch (e) {
     res.status(502).send('Video proxy error: ' + e.message);
+  }
+});
+
+// Config endpoint — returns googleClientId and scrapeServiceUrl for frontend
+app.get('/api/config', (req, res) => {
+  res.json({
+    googleClientId: process.env.GOOGLE_CLIENT_ID || process.env.VITE_GOOGLE_CLIENT_ID || '',
+    scrapeServiceUrl: process.env.SCRAPE_SERVICE_URL || '',
+  });
+});
+
+// Resolve shortened Google Photos URLs
+app.post('/api/resolve-url', async (req, res) => {
+  const { url } = req.body;
+  if (!url || typeof url !== 'string') {
+    return res.status(400).json({ error: 'Missing url parameter' });
+  }
+  try {
+    if (!url.includes('photos.app.goo.gl')) {
+      return res.json({ resolvedUrl: url });
+    }
+    const redirectRes = await fetch(url, {
+      method: 'GET',
+      redirect: 'manual',
+      headers: { 'User-Agent': 'Mozilla/5.0' }
+    });
+    const location = redirectRes.headers.get('location');
+    if (location) {
+      return res.json({ resolvedUrl: new URL(location, url).toString() });
+    }
+    // Fallback: follow redirects
+    const finalRes = await fetch(url, {
+      method: 'GET',
+      redirect: 'follow',
+      headers: { 'User-Agent': 'Mozilla/5.0' }
+    });
+    res.json({ resolvedUrl: finalRes.url || url });
+  } catch (e) {
+    console.warn('resolve-url error:', e.message);
+    res.json({ resolvedUrl: url });
+  }
+});
+
+// Google Photos Library API proxy endpoints (for OAuth flow)
+async function googlePhotosProxy(path, token, options = {}) {
+  const res = await fetch(`https://photoslibrary.googleapis.com/v1${path}`, {
+    method: options.method || 'GET',
+    headers: {
+      'Authorization': `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+    body: options.body,
+  });
+  if (!res.ok) {
+    const err = await res.text();
+    throw new Error(`Google Photos API error ${res.status}: ${err}`);
+  }
+  return res.json();
+}
+
+app.get('/api/google-photos/albums', async (req, res) => {
+  const token = req.headers.authorization?.replace('Bearer ', '');
+  if (!token) return res.status(401).json({ error: 'Missing token' });
+  try {
+    const albums = [];
+    let pageToken = req.query.pageToken;
+    do {
+      const query = pageToken ? `?pageToken=${pageToken}&pageSize=50` : '?pageSize=50';
+      const data = await googlePhotosProxy(`/albums${query}`, token);
+      if (data.albums) albums.push(...data.albums);
+      pageToken = data.nextPageToken;
+    } while (pageToken);
+    res.json({ albums });
+  } catch (err) {
+    console.error('listAlbums error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/google-photos/sharedAlbums', async (req, res) => {
+  const token = req.headers.authorization?.replace('Bearer ', '');
+  if (!token) return res.status(401).json({ error: 'Missing token' });
+  try {
+    const albums = [];
+    let pageToken = req.query.pageToken;
+    do {
+      const query = pageToken ? `?pageToken=${pageToken}&pageSize=50` : '?pageSize=50';
+      const data = await googlePhotosProxy(`/sharedAlbums${query}`, token);
+      if (data.sharedAlbums) albums.push(...data.sharedAlbums);
+      pageToken = data.nextPageToken;
+    } while (pageToken);
+    res.json({ sharedAlbums: albums });
+  } catch (err) {
+    console.error('listSharedAlbums error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/google-photos/sharedAlbums:join', async (req, res) => {
+  const token = req.headers.authorization?.replace('Bearer ', '');
+  if (!token) return res.status(401).json({ error: 'Missing token' });
+  const { shareToken } = req.body;
+  if (!shareToken) return res.status(400).json({ error: 'Missing shareToken' });
+  try {
+    const data = await googlePhotosProxy('/sharedAlbums:join', token, { method: 'POST', body: JSON.stringify({ shareToken }) });
+    res.json(data);
+  } catch (err) {
+    console.error('joinSharedAlbum error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/google-photos/albums/:albumId/mediaItems', async (req, res) => {
+  const token = req.headers.authorization?.replace('Bearer ', '');
+  if (!token) return res.status(401).json({ error: 'Missing token' });
+  const { albumId } = req.params;
+  const pageToken = req.query.pageToken;
+  try {
+    const query = pageToken ? `?pageToken=${pageToken}&pageSize=100` : '?pageSize=100';
+    const data = await googlePhotosProxy(`/albums/${albumId}/mediaItems${query}`, token);
+    res.json(data);
+  } catch (err) {
+    console.error('album mediaItems error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/google-photos/sharedAlbums/:albumId/mediaItems', async (req, res) => {
+  const token = req.headers.authorization?.replace('Bearer ', '');
+  if (!token) return res.status(401).json({ error: 'Missing token' });
+  const { albumId } = req.params;
+  const pageToken = req.query.pageToken;
+  try {
+    const query = pageToken ? `?pageToken=${pageToken}&pageSize=100` : '?pageSize=100';
+    const data = await googlePhotosProxy(`/sharedAlbums/${albumId}/mediaItems${query}`, token);
+    res.json(data);
+  } catch (err) {
+    console.error('sharedAlbum mediaItems error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/google-photos/mediaItems:search', async (req, res) => {
+  const token = req.headers.authorization?.replace('Bearer ', '');
+  if (!token) return res.status(401).json({ error: 'Missing token' });
+  const { albumId, pageToken, pageSize = 100 } = req.body;
+  if (!albumId) return res.status(400).json({ error: 'Missing albumId' });
+  try {
+    const body = { albumId, pageSize };
+    if (pageToken) body.pageToken = pageToken;
+    const data = await googlePhotosProxy('/mediaItems:search', token, { method: 'POST', body: JSON.stringify(body) });
+    res.json(data);
+  } catch (err) {
+    console.error('mediaItems:search error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/google-photos/mediaItems', async (req, res) => {
+  const token = req.headers.authorization?.replace('Bearer ', '');
+  if (!token) return res.status(401).json({ error: 'Missing token' });
+  const pageToken = req.query.pageToken;
+  try {
+    const query = pageToken ? `?pageToken=${pageToken}&pageSize=100` : '?pageSize=100';
+    const data = await googlePhotosProxy(`/mediaItems${query}`, token);
+    res.json(data);
+  } catch (err) {
+    console.error('mediaItems error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Alias /api/scrape-album to /api/parse-album for frontend compatibility
+app.post('/api/scrape-album', async (req, res) => {
+  // Forward to the existing /api/parse-album handler logic
+  const { url, urls: inputUrls } = req.body;
+  const urls = inputUrls || (url ? [url] : []);
+
+  if (urls.length === 0) {
+    return res.status(400).json({ error: 'Please enter at least one Google Photos shared album link.' });
+  }
+
+  try {
+    const allImages = [];
+
+    for (const albumUrl of urls) {
+      if (!albumUrl || (!albumUrl.includes('photos.app.goo.gl') && !albumUrl.includes('photos.google.com/share/'))) {
+        continue;
+      }
+      try {
+        const { images } = await fetchAlbum(albumUrl);
+        allImages.push(...images);
+      } catch (err) {
+        console.error(`Error fetching album ${albumUrl}:`, err);
+      }
+    }
+
+    if (allImages.length === 0) {
+      return res.status(404).json({ error: 'No photos found in these albums. Links may be private or invalid.' });
+    }
+
+    console.log(`Fetched ${allImages.length} total items from ${urls.length} album(s)`);
+    const videoCount = allImages.filter(img => img.isVideo).length;
+    const photoCount = allImages.filter(img => !img.isVideo).length;
+    console.log(`  → ${photoCount} photos, ${videoCount} videos`);
+    const { stats } = selectImages(allImages);
+
+    res.json({
+      images: allImages,
+      stats: { ...stats, videoCount },
+      album: `${urls.length} album(s) merged — ${allImages.length} total photos`
+    });
+  } catch (err) {
+    console.error('Parse album error:', err);
+    res.status(500).json({ error: 'Could not fetch albums.' });
   }
 });
 

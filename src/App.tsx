@@ -368,14 +368,9 @@ export default function App() {
           throw new Error(`Access Denied: Your Google account (${userEmail}) is not authorized to sync albums on this site.`);
         }
 
-        // 3. Since the Google Photos Library API deprecated broad read scopes as of March 31, 2025 (returning 403 scope errors),
-        // we use the public scraper endpoint to retrieve the photos, securing it behind the email validation above.
-        const scraperUrl = scrapeServiceUrl || '';
-        const endpoint = scraperUrl
-          ? `${scraperUrl.replace(/\/$/, '')}/scrape`
-          : '/api/scrape-album';
-
-        const res = await fetch(endpoint + '?_=' + Date.now(), {
+        // 3. Since the Google Photos Library API deprecated broad read scopes,
+        // we use our backend scraper endpoint, which handles the request securely.
+        const res = await fetch('/api/scrape-album?_=' + Date.now(), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ urls: validUrls }),

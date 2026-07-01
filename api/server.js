@@ -780,7 +780,6 @@ app.get('/api/google-photos/mediaItems', async (req, res) => {
 
 // Alias /api/scrape-album to /api/parse-album for frontend compatibility
 app.post('/api/scrape-album', async (req, res) => {
-  // Forward to the existing /api/parse-album handler logic
   const { url, urls: inputUrls } = req.body;
   const urls = inputUrls || (url ? [url] : []);
 
@@ -788,8 +787,29 @@ app.post('/api/scrape-album', async (req, res) => {
     return res.status(400).json({ error: 'Please enter at least one Google Photos shared album link.' });
   }
 
+  // If SCRAPE_SERVICE_URL is defined, forward the request to the external Puppeteer scraper
+  const scrapeServiceUrl = process.env.SCRAPE_SERVICE_URL;
+  if (scrapeServiceUrl) {
+    console.log(`Forwarding scrape request to external scraper service: ${scrapeServiceUrl}`);
+    try {
+      const forwardRes = await fetch(`${scrapeServiceUrl.replace(/\/$/, '')}/scrape`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ urls }),
+      });
+      if (forwardRes.ok) {
+        const data = await forwardRes.json();
+        return res.json(data);
+      }
+      console.warn(`External scraper returned status ${forwardRes.status}, falling back to local scraper...`);
+    } catch (err) {
+      console.warn('External scraper failed, falling back to local scraper:', err.message);
+    }
+  }
+
   try {
     const allImages = [];
+    let videoCount = 0;
 
     for (const albumUrl of urls) {
       if (!albumUrl || (!albumUrl.includes('photos.app.goo.gl') && !albumUrl.includes('photos.google.com/share/'))) {
@@ -798,6 +818,7 @@ app.post('/api/scrape-album', async (req, res) => {
       try {
         const { images } = await fetchAlbum(albumUrl);
         allImages.push(...images);
+        videoCount += images.filter(img => img.isVideo).length;
       } catch (err) {
         console.error(`Error fetching album ${albumUrl}:`, err);
       }
@@ -808,7 +829,6 @@ app.post('/api/scrape-album', async (req, res) => {
     }
 
     console.log(`Fetched ${allImages.length} total items from ${urls.length} album(s)`);
-    const videoCount = allImages.filter(img => img.isVideo).length;
     const photoCount = allImages.filter(img => !img.isVideo).length;
     console.log(`  → ${photoCount} photos, ${videoCount} videos`);
     const { stats } = selectImages(allImages);

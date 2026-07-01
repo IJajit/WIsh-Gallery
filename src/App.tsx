@@ -370,9 +370,14 @@ export default function App() {
           throw new Error(`Access Denied: Your Google account (${userEmail}) is not authorized to sync albums on this site.`);
         }
 
-        // 3. Since the Google Photos Library API deprecated broad read scopes,
-        // we use our backend scraper endpoint, which handles the request securely.
-        const res = await fetch('/api/scrape-album?_=' + Date.now(), {
+        // 3. Since Vercel has a strict 10s timeout, if SCRAPE_SERVICE_URL is defined,
+        // we call it directly from the browser (no timeout limit). Otherwise, fall back to /api/scrape-album.
+        const scraperUrl = scrapeServiceUrl || '';
+        const endpoint = scraperUrl
+          ? `${scraperUrl.replace(/\/$/, '')}/scrape`
+          : '/api/scrape-album';
+
+        const res = await fetch(endpoint + '?_=' + Date.now(), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ urls: validUrls }),

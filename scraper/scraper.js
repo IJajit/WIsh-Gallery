@@ -37,6 +37,7 @@ async function getBrowser() {
       '--disable-setuid-sandbox',
       '--disable-dev-shm-usage',
       '--disable-gpu',
+      '--disable-blink-features=AutomationControlled',
     ],
   });
   return browser;
@@ -114,6 +115,13 @@ async function scrapeAlbum(albumUrl, onProgress) {
   await page.setUserAgent(
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
   );
+
+  // Mask webdriver property to bypass bot detection on datacenter IPs
+  await page.evaluateOnNewDocument(() => {
+    Object.defineProperty(navigator, 'webdriver', {
+      get: () => undefined,
+    });
+  });
 
   const items = new Map();
   page.on('response', async (res) => {

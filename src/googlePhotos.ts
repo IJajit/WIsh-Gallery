@@ -137,6 +137,11 @@ interface Album {
   productUrl: string;
   coverPhotoBaseUrl: string;
   mediaItemsCount: string;
+  shareInfo?: {
+    shareableUrl?: string;
+    shareToken?: string;
+    isJoined?: boolean;
+  };
 }
 
 interface ListAlbumsResponse {
@@ -536,14 +541,17 @@ export async function syncAlbumViaOAuth(
     try {
       const sharedAlbums = await listSharedAlbums(token, signal);
       diagnostic.push(`📋 User has ${sharedAlbums.length} shared albums`);
-      let match: Album | null = null;
-
-      if (albumKey) {
-        match = sharedAlbums.find(a => a.id === albumKey || a.id.startsWith(albumKey) || albumKey.startsWith(a.id)) || null;
-      }
-      if (!match) {
-        match = sharedAlbums.find(a => resolvedUrl.includes(a.id)) || null;
-      }
+      const match = sharedAlbums.find(a => {
+        const shareableUrl = a.shareInfo?.shareableUrl?.toLowerCase() || '';
+        const productUrl = a.productUrl?.toLowerCase() || '';
+        const lowerUrl = resolvedUrl.toLowerCase();
+        const inputUrl = albumUrl.toLowerCase();
+        return (
+          (shareableUrl && (lowerUrl.includes(shareableUrl) || shareableUrl.includes(lowerUrl) || inputUrl.includes(shareableUrl) || shareableUrl.includes(inputUrl))) ||
+          (productUrl && (lowerUrl.includes(productUrl) || productUrl.includes(lowerUrl) || inputUrl.includes(productUrl) || productUrl.includes(inputUrl))) ||
+          (albumKey && (a.id === albumKey || a.id.includes(albumKey) || albumKey.includes(a.id)))
+        );
+      }) || null;
 
       if (match) {
         diagnostic.push(`✅ Found matching shared album: "${match.title}" (${match.mediaItemsCount} items)`);
@@ -583,13 +591,15 @@ export async function syncAlbumViaOAuth(
     try {
       const albums = await listAlbums(token, signal);
       diagnostic.push(`📋 User has ${albums.length} owned albums`);
-      let match: Album | null = null;
-      if (albumKey) {
-        match = albums.find(a => a.id === albumKey || a.id.includes(albumKey) || albumKey.includes(a.id)) || null;
-      }
-      if (!match) {
-        match = albums.find(a => resolvedUrl.includes(a.id)) || null;
-      }
+      const match = albums.find(a => {
+        const productUrl = a.productUrl?.toLowerCase() || '';
+        const lowerUrl = resolvedUrl.toLowerCase();
+        const inputUrl = albumUrl.toLowerCase();
+        return (
+          (productUrl && (lowerUrl.includes(productUrl) || productUrl.includes(lowerUrl) || inputUrl.includes(productUrl) || productUrl.includes(inputUrl))) ||
+          (albumKey && (a.id === albumKey || a.id.includes(albumKey) || albumKey.includes(a.id)))
+        );
+      }) || null;
       if (match) {
         diagnostic.push(`✅ Found matching owned album: "${match.title}" (${match.mediaItemsCount} items)`);
         albumName = match.title;

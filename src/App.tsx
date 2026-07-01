@@ -351,6 +351,7 @@ export default function App() {
 
         let allNewItems: ImageItem[] = [];
         let lastStats: any = null;
+        let localDiagnostics: string[] = [];
 
         for (const url of validUrls) {
           if (controller.signal.aborted) {
@@ -362,6 +363,7 @@ export default function App() {
               throw new DOMException('Aborted', 'AbortError');
             }
             const diag = result.diagnostic || [];
+            localDiagnostics.push(...diag);
             setSyncDiagnostics(diag);
             if (result.images.length > 0) {
               const items = result.images.map((img: any, i: number) => ({
@@ -383,6 +385,7 @@ export default function App() {
               throw err;
             }
             console.error(`[Sync] OAuth error for ${url}:`, err);
+            localDiagnostics.push(`❌ OAuth error: ${err.message || err}`);
             setSyncDiagnostics(prev => [...prev, `❌ OAuth error: ${err.message || err}`]);
           }
         }
@@ -403,7 +406,15 @@ export default function App() {
           return;
         }
 
-        throw new Error('No photos could be retrieved. Make sure the album is shared with your Google account.');
+        let customError = 'No photos could be retrieved. Make sure the album is shared with your Google account.';
+        const sharedAlbumListLine = localDiagnostics.find(line => line.includes('Available shared albums:'));
+        if (sharedAlbumListLine) {
+          const list = sharedAlbumListLine.replace('Available shared albums:', '').trim();
+          customError = `Could not find this album in your library. We found these shared albums: ${list}. To sync, open the shared album link in a browser while signed in as ishanjajit@gmail.com, click "Join" or "Add to library", and sync again.`;
+        } else {
+          customError += '\n\nTip: Open the shared album link in your browser while signed in as ishanjajit@gmail.com, click the "Join" button in the top right, and then try syncing again.';
+        }
+        throw new Error(customError);
       } else {
         throw new Error('Please sign in with Google to sync external albums.');
       }

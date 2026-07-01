@@ -10,6 +10,23 @@ dotenv.config({ path: path.join(__dirname, '../.env.local') });
 const app = express();
 const PORT = process.env.PORT || 4000;
 
+// Helper for fetch with safe abort timeout
+async function fetchWithTimeout(url, options = {}, timeoutMs = 5000) {
+  const controller = new AbortController();
+  const id = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(url, {
+      ...options,
+      signal: controller.signal
+    });
+    clearTimeout(id);
+    return res;
+  } catch (err) {
+    clearTimeout(id);
+    throw err;
+  }
+}
+
 app.use(express.json());
 
 const distPath = path.join(__dirname, '../dist');
@@ -242,15 +259,13 @@ async function fetchNextPage(shareUrl, albumId, pageToken, cookies, authToken) {
   for (const inner of payloads) {
     const rpcPayload = JSON.stringify([[['snAcKc', inner, null, 'generic']]]);
     const bodyStr = 'f.req=' + encodeURIComponent(rpcPayload) + '&at=&';
-
     let res;
     try {
-      res = await fetch(batchUrl, {
+      res = await fetchWithTimeout(batchUrl, {
         method: 'POST',
         headers: commonHeaders,
-        body: bodyStr,
-        signal: AbortSignal.timeout(4000)
-      });
+        body: bodyStr
+      }, 4000);
     } catch (e) {
       console.warn('fetchNextPage: network error or timeout:', e.message);
       return { items: [], nextToken: null };
@@ -323,12 +338,11 @@ async function fetchAlbum(url) {
   let shareUrl = url;
   if (url.includes('photos.app.goo.gl')) {
     try {
-      const redirectRes = await fetch(url, {
+      const redirectRes = await fetchWithTimeout(url, {
         method: 'GET',
         redirect: 'follow',
-        headers: { 'User-Agent': 'Mozilla/5.0' },
-        signal: AbortSignal.timeout(5000)
-      });
+        headers: { 'User-Agent': 'Mozilla/5.0' }
+      }, 5000);
       if (redirectRes.url) shareUrl = redirectRes.url;
       console.log(`fetchAlbum: resolved shortened URL to: ${shareUrl}`);
     } catch (e) {
@@ -343,14 +357,13 @@ async function fetchAlbum(url) {
   if (urlAlbumKey) console.log(`fetchAlbum: album key from URL: ${urlAlbumKey.slice(0, 30)}...`);
 
   console.log(`fetchAlbum: fetching initial page from ${shareUrl}`);
-  const pageRes = await fetch(shareUrl, {
+  const pageRes = await fetchWithTimeout(shareUrl, {
     headers: {
       'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
       'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
       'Accept-Language': 'en-US,en;q=0.9',
-    },
-    signal: AbortSignal.timeout(5000)
-  });
+    }
+  }, 5000);
 
   // Capture cookies set by Google for use in subsequent requests
   let cookieString = null;
@@ -788,11 +801,11 @@ app.post('/api/scrape-album', async (req, res) => {
   if (scrapeServiceUrl) {
     console.log(`Forwarding scrape request to external scraper service: ${scrapeServiceUrl}`);
     try {
-      const forwardRes = await fetch(`${scrapeServiceUrl.replace(/\/$/, '')}/scrape`, {
+      const forwardRes = await fetchWithTimeout(`${scrapeServiceUrl.replace(/\/$/, '')}/scrape`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ urls }),
-      });
+      }, 9000);
       if (forwardRes.ok) {
         const data = await forwardRes.json();
         return res.json(data);

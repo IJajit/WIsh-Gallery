@@ -357,13 +357,23 @@ async function fetchAlbum(url) {
   });
 
   // Capture cookies set by Google for use in subsequent requests
-  const rawCookies = pageRes.headers.get('set-cookie');
   let cookieString = null;
-  if (rawCookies) {
-    cookieString = rawCookies.split(/,(?=[^;]+=[^;]+;|[^;]+=)/)
-      .map(c => c.trim().split(';')[0].trim())
-      .filter(Boolean)
-      .join('; ');
+  if (typeof pageRes.headers.getSetCookie === 'function') {
+    const cookiesArray = pageRes.headers.getSetCookie();
+    if (cookiesArray && cookiesArray.length > 0) {
+      cookieString = cookiesArray.map(c => c.split(';')[0].trim()).join('; ');
+    }
+  }
+  if (!cookieString) {
+    const rawCookies = pageRes.headers.get('set-cookie');
+    if (rawCookies) {
+      cookieString = rawCookies.split(/,(?=[^;]+=[^;]+;|[^;]+=)/)
+        .map(c => c.trim().split(';')[0].trim())
+        .filter(Boolean)
+        .join('; ');
+    }
+  }
+  if (cookieString) {
     console.log(`fetchAlbum: captured ${cookieString.split(';').length} cookies`);
   }
 

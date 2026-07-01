@@ -787,6 +787,50 @@ app.get('/api/google-photos/mediaItems', async (req, res) => {
   }
 });
 
+app.get('/api/video-proxy', async (req, res) => {
+  const videoUrl = req.query.url;
+  if (!videoUrl) return res.status(400).send('Missing url parameter');
+
+  try {
+    const headers = {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
+    };
+    if (req.headers.range) {
+      headers['Range'] = req.headers.range;
+    }
+
+    const response = await fetch(videoUrl, { headers });
+
+    res.status(response.status);
+    
+    const contentType = response.headers.get('content-type');
+    if (contentType) res.setHeader('Content-Type', contentType);
+    
+    const contentLength = response.headers.get('content-length');
+    if (contentLength) res.setHeader('Content-Length', contentLength);
+    
+    const contentRange = response.headers.get('content-range');
+    if (contentRange) res.setHeader('Content-Range', contentRange);
+    
+    const acceptRanges = response.headers.get('accept-ranges');
+    if (acceptRanges) res.setHeader('Accept-Ranges', acceptRanges);
+
+    if (response.body) {
+      if (response.body.pipe) {
+        response.body.pipe(res);
+      } else {
+        const { Readable } = await import('stream');
+        Readable.fromWeb(response.body).pipe(res);
+      }
+    } else {
+      res.end();
+    }
+  } catch (err) {
+    console.error('video-proxy error:', err);
+    res.status(500).send('Proxy error');
+  }
+});
+
 // Alias /api/scrape-album to /api/parse-album for frontend compatibility
 app.post('/api/scrape-album', async (req, res) => {
   const { url, urls: inputUrls } = req.body;

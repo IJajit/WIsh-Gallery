@@ -296,8 +296,8 @@ app.post('/scrape', async (req, res) => {
   }
 });
 
-const server = app.listen(PORT, () => {
-  console.log(`[scraper] listening on :${PORT}`);
+const server = app.listen(PORT, '0.0.0.0', () => {
+  console.log(`[scraper] listening on 0.0.0.0:${PORT}`);
 });
 
 const shutdown = async () => {

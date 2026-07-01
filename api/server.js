@@ -245,9 +245,14 @@ async function fetchNextPage(shareUrl, albumId, pageToken, cookies, authToken) {
 
     let res;
     try {
-      res = await fetch(batchUrl, { method: 'POST', headers: commonHeaders, body: bodyStr });
+      res = await fetch(batchUrl, {
+        method: 'POST',
+        headers: commonHeaders,
+        body: bodyStr,
+        signal: AbortSignal.timeout(4000)
+      });
     } catch (e) {
-      console.warn('fetchNextPage: network error:', e.message);
+      console.warn('fetchNextPage: network error or timeout:', e.message);
       return { items: [], nextToken: null };
     }
 
@@ -318,23 +323,13 @@ async function fetchAlbum(url) {
   let shareUrl = url;
   if (url.includes('photos.app.goo.gl')) {
     try {
-      let redirectRes = await fetch(url, {
+      const redirectRes = await fetch(url, {
         method: 'GET',
-        redirect: 'manual',
-        headers: { 'User-Agent': 'Mozilla/5.0' }
+        redirect: 'follow',
+        headers: { 'User-Agent': 'Mozilla/5.0' },
+        signal: AbortSignal.timeout(5000)
       });
-      if ([301, 302, 303, 307, 308].includes(redirectRes.status)) {
-        const location = redirectRes.headers.get('location');
-        if (location) shareUrl = new URL(location, url).toString();
-      } else {
-        // Fallback: follow redirect
-        redirectRes = await fetch(url, {
-          method: 'GET',
-          redirect: 'follow',
-          headers: { 'User-Agent': 'Mozilla/5.0' }
-        });
-        if (redirectRes.url) shareUrl = redirectRes.url;
-      }
+      if (redirectRes.url) shareUrl = redirectRes.url;
       console.log(`fetchAlbum: resolved shortened URL to: ${shareUrl}`);
     } catch (e) {
       console.warn('fetchAlbum: could not resolve short URL:', e.message);
@@ -353,7 +348,8 @@ async function fetchAlbum(url) {
       'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
       'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
       'Accept-Language': 'en-US,en;q=0.9',
-    }
+    },
+    signal: AbortSignal.timeout(5000)
   });
 
   // Capture cookies set by Google for use in subsequent requests

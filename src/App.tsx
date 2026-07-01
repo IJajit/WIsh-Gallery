@@ -732,6 +732,9 @@ export default function App() {
                                   </>
                                 )}
                               </button>
+                              {albumError && (
+                                <p className="text-[9px] font-mono text-red-500 mt-1 leading-relaxed text-center whitespace-pre-wrap">{albumError}</p>
+                              )}
                             </div>
                           ) : (
                             <>
@@ -814,7 +817,7 @@ export default function App() {
                               </div>
 
                               {albumError && (
-                                <p className="text-[9px] font-mono text-red-500 mt-1 leading-relaxed">{albumError}</p>
+                                <p className="text-[9px] font-mono text-red-500 mt-1 leading-relaxed whitespace-pre-wrap">{albumError}</p>
                               )}
                             </>
                           )}

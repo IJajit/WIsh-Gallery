@@ -147,6 +147,7 @@ export default function App() {
   const [googleClientId, setGoogleClientId] = useState<string>('');
   const [allowedEmails, setAllowedEmails] = useState<string>('ishanjajit@gmail.com');
   const [syncDiagnostics, setSyncDiagnostics] = useState<string[]>([]);
+  const [syncWarning, setSyncWarning] = useState<string>('');
 
   const [scrapeServiceUrl, setScrapeServiceUrl] = useState<string>('');
   useEffect(() => {
@@ -337,6 +338,7 @@ export default function App() {
     if (validUrls.length === 0) return;
     setAlbumLoading(true);
     setAlbumError('');
+    setSyncWarning('');
     setSyncDiagnostics([]);
 
     const controller = new AbortController();
@@ -402,6 +404,10 @@ export default function App() {
           isVideo: img.isVideo || undefined,
           videoUrl: img.videoUrl || undefined,
         }));
+
+        if (newItems.length === 300) {
+          setSyncWarning("⚠️ Only 300 items were synced. If your album has more, ensure you've deployed the Render scraper microservice and configured SCRAPE_SERVICE_URL in your Vercel Dashboard to fetch the full album.");
+        }
 
         setWishAlbums(prev => prev.map(album => {
           if (album.id !== activeWishAlbumId) return album;
@@ -815,6 +821,10 @@ export default function App() {
 
                               {albumError && (
                                 <p className="text-[9px] font-mono text-red-500 mt-1 leading-relaxed whitespace-pre-wrap">{albumError}</p>
+                              )}
+
+                              {syncWarning && (
+                                <p className="text-[9px] font-mono text-amber-600 mt-1.5 leading-relaxed whitespace-pre-wrap">{syncWarning}</p>
                               )}
                             </>
                           )}

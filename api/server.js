@@ -377,10 +377,10 @@ async function fetchAlbum(url) {
   // - authToken (AH_uQ...) is required for batchexecute to work
   // - contToken is the page-continuation token
   // - If we have authToken but no contToken, try fetching with just the album ID
-  const canPaginate = authToken && effectiveAlbumId;
+  const canPaginate = !!effectiveAlbumId && !!contToken;
 
-  if (canPaginate && contToken) {
-    console.log(`fetchAlbum: starting pagination from ${images.length} initial items (authToken=${authToken.slice(0,15)}...)`);
+  if (canPaginate) {
+    console.log(`fetchAlbum: starting pagination from ${images.length} initial items (authToken=${authToken ? authToken.slice(0,15) : 'missing'}...)`);
     let pageToken = contToken;
     let page = 1;
     const MAX_PAGES = 50;

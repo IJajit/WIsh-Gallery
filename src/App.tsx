@@ -406,14 +406,14 @@ export default function App() {
           return;
         }
 
-        let customError = 'No photos could be retrieved. Make sure the album is shared with your Google account.';
-        const sharedAlbumListLine = localDiagnostics.find(line => line.includes('Available shared albums:'));
-        if (sharedAlbumListLine) {
-          const list = sharedAlbumListLine.replace('Available shared albums:', '').trim();
-          customError = `Could not find this album in your library. We found these shared albums: ${list}. To sync, open the shared album link in a browser while signed in as ishanjajit@gmail.com, click "Join" or "Add to library", and sync again.`;
-        } else {
-          customError += '\n\nTip: Open the shared album link in your browser while signed in as ishanjajit@gmail.com, click the "Join" button in the top right, and then try syncing again.';
+        let customError = 'No photos could be retrieved.\n\n';
+        if (localDiagnostics.length > 0) {
+          customError += `Diagnostic Logs:\n` + localDiagnostics.map(line => `• ${line}`).join('\n') + `\n\n`;
         }
+        customError += `Troubleshooting Checklist:\n` +
+          `1. Check if the album link is correct and not truncated (the link in the screenshot looks short; Google Photos links usually have more characters).\n` +
+          `2. Open the link in your browser while signed in as ishanjajit@gmail.com and make sure you click the "Join" button in the top right.\n` +
+          `3. When signing in to the website, make sure you check the checkbox to grant Google Photos permissions (Google hides these behind checkboxes on the consent screen).`;
         throw new Error(customError);
       } else {
         throw new Error('Please sign in with Google to sync external albums.');

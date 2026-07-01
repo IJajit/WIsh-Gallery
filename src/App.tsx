@@ -145,6 +145,7 @@ export default function App() {
   const syncStatsTimerRef = useRef<ReturnType<typeof setTimeout>>();
   const [googleSignedIn, setGoogleSignedIn] = useState<boolean>(isGoogleSignedIn());
   const [googleClientId, setGoogleClientId] = useState<string>('');
+  const [allowedEmails, setAllowedEmails] = useState<string>('ishanjajit@gmail.com');
   const [syncDiagnostics, setSyncDiagnostics] = useState<string[]>([]);
 
   const [scrapeServiceUrl, setScrapeServiceUrl] = useState<string>('');
@@ -154,6 +155,7 @@ export default function App() {
       .then(cfg => {
         if (cfg.googleClientId) setGoogleClientId(cfg.googleClientId);
         if (cfg.scrapeServiceUrl) setScrapeServiceUrl(cfg.scrapeServiceUrl);
+        if (cfg.allowedEmails) setAllowedEmails(cfg.allowedEmails);
       })
       .catch(() => {});
   }, []);
@@ -349,72 +351,66 @@ export default function App() {
           return;
         }
 
-        let allNewItems: ImageItem[] = [];
-        let lastStats: any = null;
-        let localDiagnostics: string[] = [];
-
-        for (const url of validUrls) {
-          if (controller.signal.aborted) {
-            throw new DOMException('Aborted', 'AbortError');
-          }
-          try {
-            const result = await syncAlbumViaOAuth(token, url, controller.signal);
-            if (controller.signal.aborted) {
-              throw new DOMException('Aborted', 'AbortError');
-            }
-            const diag = result.diagnostic || [];
-            localDiagnostics.push(...diag);
-            setSyncDiagnostics(diag);
-            if (result.images.length > 0) {
-              const items = result.images.map((img: any, i: number) => ({
-                id: `google-photos-${Date.now()}-${i}`,
-                url: img.url,
-                title: img.title || 'Google Photos',
-                author: 'Google Photos',
-                category: 'Synced',
-                description: img.description || 'Imported from Google Photos shared album.',
-                timestamp: img.timestamp || undefined,
-                isVideo: img.isVideo || undefined,
-                videoUrl: img.videoUrl || undefined,
-              }));
-              allNewItems.push(...items);
-              lastStats = result.stats;
-            }
-          } catch (err: any) {
-            if (err.name === 'AbortError' || controller.signal.aborted) {
-              throw err;
-            }
-            console.error(`[Sync] OAuth error for ${url}:`, err);
-            localDiagnostics.push(`❌ OAuth error: ${err.message || err}`);
-            setSyncDiagnostics(prev => [...prev, `❌ OAuth error: ${err.message || err}`]);
-          }
+        // 1. Fetch user profile from Google to verify email
+        const tokenInfoRes = await fetch('https://oauth2.googleapis.com/tokeninfo?access_token=' + token, { signal: controller.signal });
+        if (!tokenInfoRes.ok) {
+          throw new Error('Google session expired. Please sign out and sign in again.');
+        }
+        const tokenInfo = await tokenInfoRes.json();
+        const userEmail = tokenInfo.email;
+        if (!userEmail) {
+          throw new Error('Could not retrieve your Google account email.');
         }
 
-        if (controller.signal.aborted) {
-          throw new DOMException('Aborted', 'AbortError');
+        // 2. Security Check: verify if the logged-in email is authorized
+        const allowedList = allowedEmails.toLowerCase().split(',').map((e: string) => e.trim());
+        if (!allowedList.includes(userEmail.toLowerCase())) {
+          throw new Error(`Access Denied: Your Google account (${userEmail}) is not authorized to sync albums on this site.`);
         }
 
-        if (allNewItems.length > 0) {
-          setWishAlbums(prev => prev.map(album => {
-            if (album.id !== activeWishAlbumId) return album;
-            const nonSynced = album.items.filter(item => !item.id.startsWith('google-photos-'));
-            return { ...album, items: [...allNewItems, ...nonSynced] };
-          }));
-          setGallerySource('wish');
-          setLastSyncedAlbumUrls(validUrls);
-          if (lastStats) showSyncStats(lastStats);
-          return;
+        // 3. Since the Google Photos Library API deprecated broad read scopes as of March 31, 2025 (returning 403 scope errors),
+        // we use the public scraper endpoint to retrieve the photos, securing it behind the email validation above.
+        const scraperUrl = scrapeServiceUrl || '';
+        const endpoint = scraperUrl
+          ? `${scraperUrl.replace(/\/$/, '')}/scrape`
+          : '/api/scrape-album';
+
+        const res = await fetch(endpoint + '?_=' + Date.now(), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ urls: validUrls }),
+          signal: controller.signal,
+        });
+
+        const data = await res.json();
+        if (!res.ok || data.error) {
+          throw new Error(data.error || 'Could not fetch albums.');
+        }
+        if (!data.images || data.images.length === 0) {
+          throw new Error('No photos found in these albums. Make sure the album is public/shared.');
         }
 
-        let customError = 'No photos could be retrieved.\n\n';
-        if (localDiagnostics.length > 0) {
-          customError += `Diagnostic Logs:\n` + localDiagnostics.map(line => `• ${line}`).join('\n') + `\n\n`;
-        }
-        customError += `Troubleshooting Checklist:\n` +
-          `1. Check if the album link is correct and not truncated (the link in the screenshot looks short; Google Photos links usually have more characters).\n` +
-          `2. Open the link in your browser while signed in as ishanjajit@gmail.com and make sure you click the "Join" button in the top right.\n` +
-          `3. When signing in to the website, make sure you check the checkbox to grant Google Photos permissions (Google hides these behind checkboxes on the consent screen).`;
-        throw new Error(customError);
+        const newItems = data.images.map((img: any, i: number) => ({
+          id: `google-photos-${Date.now()}-${i}`,
+          url: img.url,
+          title: img.title || 'Google Photos',
+          author: 'Google Photos',
+          category: 'Synced',
+          description: img.description || 'Imported from Google Photos shared album.',
+          timestamp: img.timestamp || undefined,
+          isVideo: img.isVideo || undefined,
+          videoUrl: img.videoUrl || undefined,
+        }));
+
+        setWishAlbums(prev => prev.map(album => {
+          if (album.id !== activeWishAlbumId) return album;
+          const nonSynced = album.items.filter(item => !item.id.startsWith('google-photos-'));
+          return { ...album, items: [...newItems, ...nonSynced] };
+        }));
+        setGallerySource('wish');
+        setLastSyncedAlbumUrls(validUrls);
+        if (data.stats) showSyncStats(data.stats);
+        return;
       } else {
         throw new Error('Please sign in with Google to sync external albums.');
       }

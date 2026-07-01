@@ -9,7 +9,7 @@
  */
 
 const PHOTOS_API_BASE = '/api/google-photos';
-const SCOPES = 'https://www.googleapis.com/auth/photoslibrary https://www.googleapis.com/auth/photoslibrary.sharing';
+const SCOPES = 'openid email profile';
 
 let accessToken: string | null = null;
 let tokenExpiration: number = 0;

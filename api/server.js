@@ -598,11 +598,12 @@ app.get('/api/video-proxy', async (req, res) => {
   }
 });
 
-// Config endpoint — returns googleClientId and scrapeServiceUrl for frontend
+// Config endpoint — returns googleClientId, scrapeServiceUrl, and allowedEmails for frontend
 app.get('/api/config', (req, res) => {
   res.json({
     googleClientId: process.env.GOOGLE_CLIENT_ID || process.env.VITE_GOOGLE_CLIENT_ID || '',
     scrapeServiceUrl: process.env.SCRAPE_SERVICE_URL || '',
+    allowedEmails: process.env.ALLOWED_EMAILS || 'ishanjajit@gmail.com',
   });
 });
 

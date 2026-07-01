@@ -110,10 +110,8 @@ function parseBatchItems(rawItems, out, albumName) {
       let timestamp = typeof item[2] === 'number' ? item[2] : null;
       if (timestamp !== null && timestamp < 100000000000) timestamp *= 1000;
       let videoUrl = null;
-      if (typeof item[3] === 'string' && (item[3].startsWith('https://') || item[3].startsWith('http://')) && item[3] !== imageUrl) {
-        videoUrl = item[3];
-      } else if (Array.isArray(media) && media.length > 3 && typeof media[3] === 'string' && media[3].startsWith('http') && !media[3].includes('googleusercontent')) {
-        videoUrl = media[3];
+      if (isVideo) {
+        videoUrl = `${imageUrl.split('=')[0]}=dv`;
       }
       out.push({
         url: fullResUrl,

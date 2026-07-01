@@ -84,13 +84,7 @@ function parseItemsFromJson(items) {
     const isVideo = looksLikeVideo(itemStr);
     let videoUrl = null;
     if (isVideo) {
-      const candidates = item.slice(3, 8);
-      for (const c of candidates) {
-        if (typeof c === 'string' && c.startsWith('http') && c !== origUrl && !c.includes('googleusercontent')) {
-          videoUrl = c;
-          break;
-        }
-      }
+      videoUrl = `${origUrl.split('=')[0]}=dv`;
     }
     out.push({
       photoId: pid,

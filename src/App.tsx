@@ -377,7 +377,13 @@ export default function App() {
           signal: controller.signal,
         });
 
-        const data = await res.json();
+        const text = await res.text();
+        let data;
+        try {
+          data = JSON.parse(text);
+        } catch (e) {
+          throw new Error('Server returned an invalid response (not JSON).\n\nThis usually means the Vercel function timed out (10s limit) or the Render scraper service is offline.\n\nTroubleshooting:\n1. If your album is large (>300 photos), ensure you have deployed the scraper service to Render and set the SCRAPE_SERVICE_URL environment variable in your Vercel project settings.\n2. Verify the Render service is online and active.');
+        }
         if (!res.ok || data.error) {
           throw new Error(data.error || 'Could not fetch albums.');
         }

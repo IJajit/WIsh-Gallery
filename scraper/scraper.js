@@ -190,9 +190,11 @@ async function scrapeAlbum(albumUrl, onProgress) {
   if (onProgress) onProgress(`Loaded ${items.size} initial items. Scrolling for more...`);
 
   if (items.size === 0) {
-    console.log(`[scrape] no items found in initial HTML, skipping scroll loop.`);
+    const pageTitle = await page.title();
+    const pageContentSnippet = (await page.content()).slice(0, 1000);
+    console.warn(`[scrape] no items found. Page title: "${pageTitle}". Content snippet:`, pageContentSnippet);
     await page.close();
-    return [];
+    throw new Error(`Puppeteer found 0 photos. Page title: "${pageTitle}". Make sure the album is shared publically.`);
   }
 
   let staleScrolls = 0;
@@ -255,6 +257,7 @@ app.post('/scrape', async (req, res) => {
   }
 
   try {
+    let lastError = null;
     const all = [];
     for (const u of urls) {
       if (!u || (!u.includes('photos.app.goo.gl') && !u.includes('photos.google.com/share/'))) {
@@ -265,11 +268,16 @@ app.post('/scrape', async (req, res) => {
         all.push(...imgs);
       } catch (err) {
         console.error(`[scrape] error for ${u}:`, err.message);
+        lastError = err.message;
       }
     }
 
     if (all.length === 0) {
-      return res.status(404).json({ error: 'No photos found. The album may be private or invalid.' });
+      return res.status(404).json({
+        error: lastError
+          ? `Scrape failed: ${lastError}`
+          : 'No photos found. The album may be private or invalid.'
+      });
     }
 
     const videoCount = all.filter(i => i.isVideo).length;
